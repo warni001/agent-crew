@@ -57,12 +57,19 @@ all. The flow is:
    `GITHUB_TOKEN` (`packages: write`):
    `ghcr.io/warni001/agent-crew:latest` and
    `ghcr.io/warni001/agent-crew:sha-<commit-sha>`.
-4. The Container App is updated to the sha-tagged image, with a unique
-   revision suffix. Never deploy `:latest`: updating with an unchanged
-   `:latest` string mints no new revision, and a `:latest` pull can
-   resolve to a stale cached manifest. A sha tag can only ever point
-   at one digest. The image for a commit is
-   `crew.tools.image_for_commit(<sha>)`.
+4. The Container App is updated to the sha-tagged image automatically:
+   the deploy job in `crew-image.yml` waits for CI to pass on the
+   commit, verifies the sha-tagged manifest resolves, then updates
+   the app with a unique revision suffix and verifies the new
+   revision reports ready — a push to main deploys automatically.
+   Never deploy `:latest`: updating with an unchanged `:latest`
+   string mints no new revision, and a `:latest` pull can resolve to
+   a stale cached manifest. A sha tag can only ever point at one
+   digest. The image for a commit is
+   `crew.tools.image_for_commit(<sha>)`. A deploy restarts the
+   container, so an in-flight task restarts — finished work is never
+   re-run (the "[crew] Done:" issue guard). The manual fallback, if
+   the deploy job ever needs bypassing, is:
 
    ```bash
    az containerapp update -g rg-agent-crew -n ca-agent-crew --image ghcr.io/warni001/agent-crew:sha-<commit-sha> --revision-suffix <suffix>

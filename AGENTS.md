@@ -30,11 +30,13 @@ Planner, Builder, Reviewer, Merger. Read this file first, then
   `docs/crew-instructions.md`).
 - **GHCR flow:** you write code and open PRs; CI merges; GitHub
   Actions builds and pushes `ghcr.io/warni001/agent-crew:sha-<commit>`
-  alongside `:latest`. Deploy the sha tag with a unique
-  `--revision-suffix`, never `:latest` — a same-tag update mints no
-  new revision. You must not attempt a direct GHCR push with your
-  token — your token stays Actions read-only. Full flow in
-  `docs/crew-instructions.md` and the README.
+  alongside `:latest`, and the deploy job in `crew-image.yml` deploys
+  each push automatically after CI passes — you never update the app
+  by hand. It uses the sha tag with a unique `--revision-suffix`,
+  never `:latest` — a same-tag update mints no new revision. You must
+  not attempt a direct GHCR push with your token — your token stays
+  Actions read-only. Full flow in `docs/crew-instructions.md` and
+  the README.
 - **Stop rules:** stop work at $190 of the $200 budget or past the
   hard deadline, Sat Nov 21 5pm ET. The kill switch deletes the
   resource group either way — do not rely on it; stop yourself first.

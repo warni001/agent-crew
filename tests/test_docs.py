@@ -6,8 +6,9 @@ now. They pin the two rules the repo owner set:
 1. GHCR flow: crew writes code and opens PRs; CI merges; Actions
    builds and pushes ``ghcr.io/warni001/agent-crew:latest`` and a
    sha-tagged image with ``GITHUB_TOKEN`` (``packages: write``); the
-   Container App is then updated to the sha-tagged image with a unique
-   revision suffix — never ``:latest`` (an unchanged ``:latest``
+   deploy job in ``crew-image.yml`` then updates the Container App to
+   the sha-tagged image automatically once CI passes on the commit,
+   with a unique revision suffix — never ``:latest`` (an unchanged
    string mints no new revision, and a ``:latest`` pull can resolve
    stale). The crew PAT stays Actions read-only and the crew must
    never attempt a direct GHCR push with it. The package must be made
@@ -60,6 +61,20 @@ def test_readme_has_ghcr_flow(repo_root):
     assert UPDATE_CMD in text
     assert "packages: write" in text
     assert "GITHUB_TOKEN" in text
+
+
+def test_readme_states_auto_deploy(repo_root):
+    text = _read(repo_root, "README.md").lower()
+    assert "deploys automatically" in text
+    assert "deploy job" in text
+    assert "waits for ci to pass" in text
+
+
+def test_crew_instructions_states_auto_deploy(repo_root):
+    text = _read(repo_root, "docs/crew-instructions.md").lower()
+    assert "deploys automatically" in text
+    assert "deploy job" in text
+    assert "waits for ci to pass" in text
 
 
 def test_readme_notes_package_must_be_public(repo_root):
