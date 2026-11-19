@@ -142,9 +142,20 @@ KEY_VAULT_NAME="$(echo "$RESULT" | python3 -c 'import json,sys; print(json.load(
 # GitHub token: the crew's fine-grained PAT, stored as GitHubToken.
 # Skips when the vault already has it; warns and skips when no token
 # was supplied. The token value is never printed.
+# The vault is RBAC-only and the template gives the crew read access
+# only, so the deployer needs Key Vault Secrets Officer to store the
+# token (Nov 19: the first deploy failed ForbiddenByRbac here until
+# the role was granted manually). Grant it idempotently first.
 if az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name GitHubToken >/dev/null 2>&1; then
   echo "GitHubToken already in Key Vault $KEY_VAULT_NAME; skipping."
 elif [ -n "${GITHUB_CREW_TOKEN:-}" ]; then
+  DEPLOYER_OID="$(az ad signed-in-user show --query id -o tsv)"
+  VAULT_SCOPE="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.KeyVault/vaults/$KEY_VAULT_NAME"
+  if [ -z "$(az role assignment list --assignee "$DEPLOYER_OID" --role "Key Vault Secrets Officer" --scope "$VAULT_SCOPE" --query "[0].id" -o tsv)" ]; then
+    az role assignment create --assignee "$DEPLOYER_OID" --role "Key Vault Secrets Officer" --scope "$VAULT_SCOPE" -o none
+    echo "Granted Key Vault Secrets Officer on $KEY_VAULT_NAME to the deployer; waiting 45s for propagation..."
+    sleep 45
+  fi
   az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name GitHubToken --value "$GITHUB_CREW_TOKEN" -o none
   unset GITHUB_CREW_TOKEN
   echo "Stored GitHubToken in Key Vault $KEY_VAULT_NAME."
