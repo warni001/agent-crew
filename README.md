@@ -119,9 +119,9 @@ is the crew's first task.
 
 Two Foundry accounts because the families do not share a region:
 GPT-6.2 is available in westus3 but not eastus2 (Foundry region
-table); eastus2 hosts all three Claude families. Capacities default
-to 10 (thousands of TPM) per deployment — raise them with the
-`*Capacity` params once quota is confirmed.
+table); eastus2 hosts all three Claude families. Capacities are 100
+(thousands of TPM) per deployment — quota is 1000K TPM Global
+Standard in westus3 for both GPT-6.2 models, verified Nov 19.
 
 Open questions, flagged in the template rather than guessed:
 
@@ -156,7 +156,8 @@ Checked before this push (Nov 19):
 Still needs a live deploy to confirm (no `az` on the build machine,
 and nothing here has touched Azure yet):
 
-- TPM quota for all three models in their regions.
+- TPM quota for claude-sonnet-5-5 in eastus2 (GPT-6.2 quota verified:
+  1000K TPM Global Standard in westus3).
 - Claude subscription eligibility (Enterprise / MCA-E).
 - The Claude version/hosting question above.
 - The Logic App end-to-end: budget → Action Group → callback URL →
