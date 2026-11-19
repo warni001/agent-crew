@@ -28,7 +28,12 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY crew/ ./crew/
 
-RUN useradd --create-home --uid 10001 appuser
+# /app was built as root; the crew runs as appuser and must be able to
+# write here (the ledger, and any file the builder writes). Without
+# this, the first ledger write dies with PermissionError and the
+# container restarts in a loop.
+RUN useradd --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /app
 USER appuser
 
 # No task argument: the crew runs its default self-build task first,

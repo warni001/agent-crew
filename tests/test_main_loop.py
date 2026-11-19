@@ -192,6 +192,21 @@ def test_poll_seconds_env_override(main_mod, monkeypatch):
     assert main_mod.poll_seconds() == 30
 
 
+def test_ledger_failure_does_not_kill_run(main_mod, config_mod, monkeypatch):
+    """A ledger PermissionError (the live crash-loop cause) warns and the
+    task still runs: the ledger is an audit trail, not the work itself."""
+    config = make_config(config_mod)
+    ledger = mock.Mock()
+    ledger.record.side_effect = PermissionError("Permission denied")
+    ledger.entries.return_value = []
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    run_task = mock.AsyncMock(return_value=["done"])
+    monkeypatch.setattr(main_mod, "run_task", run_task)
+    monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
+    assert main_mod.run_one_task(config, ledger, "do the thing") == 0
+    run_task.assert_awaited_once()
+
+
 def test_main_explicit_task_runs_once(main_mod, tmp_path, monkeypatch):
     monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", PROJECT_ENDPOINT)
     monkeypatch.setenv("KEY_VAULT_URL", "https://kv-example.vault.azure.net/")

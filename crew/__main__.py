@@ -84,20 +84,32 @@ def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
     return None
 
 
+def _record(ledger: Ledger, event: str, **fields: object) -> None:
+    """Best-effort ledger write: a ledger failure warns, never kills a run.
+
+    The ledger is an audit trail, not the work itself. (A PermissionError
+    here once crash-looped the whole container before any model call.)
+    """
+    try:
+        ledger.record(event, **fields)
+    except Exception as exc:  # noqa: BLE001 - ledger must not kill a run
+        logging.getLogger("crew").warning("ledger %s failed: %s", event, exc)
+
+
 def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
     """Run a single task through the crew. Returns the exit code."""
     log = logging.getLogger("crew")
-    ledger.record("task_started", task=task, repo=config.repo)
+    _record(ledger, "task_started", task=task, repo=config.repo)
     try:
         workflow = build_workflow(config)
         outputs = asyncio.run(run_task(workflow, task, config))
     except Exception as exc:  # noqa: BLE001 - report the failure, then exit 1
-        ledger.record("task_failed", task=task, error=str(exc))
+        _record(ledger, "task_failed", task=task, error=str(exc))
         log.error("task failed: %s", exc)
         return 1
 
     summary = "\n\n".join(str(o) for o in outputs) or "(no output)"
-    ledger.record("task_finished", task=task, outputs=outputs)
+    _record(ledger, "task_finished", task=task, outputs=outputs)
     log.info("task finished:\n%s", summary)
     try:
         url = report_done(config.repo, task, summary)
