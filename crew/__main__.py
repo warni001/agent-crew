@@ -44,6 +44,9 @@ def setup_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     # Quiet the chatty Azure loggers; the root handler captures everything.
     logging.getLogger("azure").setLevel(logging.WARNING)
+    # Quiet httpx's per-request INFO lines (one per Foundry call); the
+    # Magentic progress-ledger warnings stay at WARNING on purpose.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def _done_task_texts(ledger: Ledger) -> set[str]:
