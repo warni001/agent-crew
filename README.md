@@ -164,3 +164,60 @@ and nothing here has touched Azure yet):
   resource-group delete. The `listCallbackUrl` wiring follows
   Microsoft's documented pattern, but only a live fire proves it.
 - The subscription-scoped module (custom role + assignment).
+
+## How to run locally
+
+```bash
+python3.14 -m venv .venv
+.venv/bin/pip install pytest
+.venv/bin/python -m pytest tests/ -v
+```
+
+Tests run offline: the Foundry clients and the `gh` CLI are mocked
+(`unittest.mock`, see `tests/conftest.py`). No live model calls, no
+live Azure calls. The full crew needs `KEY_VAULT_URL`,
+`FOUNDRY_GPT_ENDPOINT`, and `GITHUB_TOKEN` from the environment;
+the tests do not. The crew package (`crew/`) is built by a parallel
+track — tests that need it skip until it merges, and the skip list
+names the blocking module.
+
+## How the crew starts
+
+The crew runs as one always-on replica in Container App
+`ca-agent-crew` (see "Compute" above). On start it loads config
+from the environment only, reads its token from Key Vault
+`kv-agentcrew-vaxvu3c2`, and picks up its next task from GitHub
+issues in this repo. Roles: Planner (GPT-6.2 Astra) plans,
+Builder (GPT-6.2 Sol) implements and opens the PR, Reviewer
+(GPT-6.2 Astra) reviews against Ponytail and signs off, Merger
+(GPT-6.2 Sol) merges once tests, CI, and Reviewer sign-off are
+green. Full operating instructions: `docs/crew-instructions.md`;
+coding rules: `ponytail.md`, pointed at by `AGENTS.md`.
+
+The first task is building/improving v1 of itself in this repo —
+the crew package, the gates, the feedback loop, and the scope lock.
+That is project #1. The next project after v1 is the ResumeBot
+multi-tenant platform (a separate private repo), arriving through
+an issue when v1 is ready.
+
+## Shipping the crew image (GHCR flow)
+
+The crew token stays Actions read-only — that is fine, because the
+GHCR push never uses the crew token. The flow is:
+
+1. The crew writes code and opens PRs in `warni001/agent-crew`.
+2. CI merges (tests, Reviewer sign-off, CI green).
+3. GitHub Actions builds the image and pushes it with
+   `GITHUB_TOKEN` (`packages: write`):
+   `ghcr.io/warni001/agent-crew:latest`.
+4. The Container App is updated to that image:
+
+   ```bash
+   az containerapp update -g rg-agent-crew -n ca-agent-crew --image ghcr.io/warni001/agent-crew:latest
+   ```
+
+The crew must not attempt a direct GHCR push with its token — a
+direct `docker push` with the crew PAT will fail (no Packages
+permission) and is forbidden regardless. After the first push, the
+package must be made public so the Container App can pull it
+anonymously.
