@@ -16,7 +16,11 @@ jobs:
           python-version: "3.14"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # pytest is a test-only dependency: install it here, not in
+        # requirements.txt (the runtime image must not carry it).
+        # CI failed 2026-11-19 with "pytest: command not found" because
+        # this step installed only the runtime requirements.
+        run: pip install -r requirements.txt pytest==9.2.0
 
       - name: Reject hijacked agent-framework versions
         # 1.26.1/1.26.2 were hijacked and removed from PyPI — never install
