@@ -94,6 +94,17 @@ def test_from_env_ledger_blob_url_reads_env(config_mod, clean_env, monkeypatch):
     )
 
 
+def test_from_env_max_rounds_default_is_30(config_mod, clean_env):
+    cfg = config_mod.CrewConfig.from_env(env=dict(os.environ))
+    assert cfg.max_rounds == 30
+
+
+def test_from_env_max_rounds_reads_env(config_mod, clean_env, monkeypatch):
+    monkeypatch.setenv("CREW_MAX_ROUNDS", "5")
+    cfg = config_mod.CrewConfig.from_env()
+    assert cfg.max_rounds == 5
+
+
 def test_no_secret_literals_in_crew_config_source(config_mod):
     """The config module itself must not contain a literal token/secret."""
     import inspect

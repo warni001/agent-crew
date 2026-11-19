@@ -5,8 +5,8 @@ no argument, runs the default self-build task first, then polls GitHub
 issues labelled `crew-task` for the next task, sleeping POLL_SECONDS
 between polls, until the credit/deadline stop rule fires. The loop
 never re-runs a task the ledger or a "[crew] Done:" issue says is
-finished or failed — a failed task is not retried automatically; open
-a new issue to re-queue it.
+finished, failed, or stalled — a stalled task hit the round cap and
+is not retried automatically; open a new issue to re-queue it.
 
 Loads config from env, validates it, builds the Magentic workflow, runs
 one task, records the run in the ledger, and posts a "done" issue update.
@@ -24,7 +24,7 @@ import time
 
 from .config import CrewConfig
 from .credit import stop_reason
-from .feedback import list_done_tasks, list_task_issues, report_done
+from .feedback import list_done_tasks, list_task_issues, report_done, report_stalled
 from .blob_ledger import build_ledger
 from .ledger import Ledger
 from .orchestration import build_workflow, run_task
@@ -50,14 +50,37 @@ def setup_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def _done_task_texts(ledger: Ledger) -> set[str]:
-    """Task strings the ledger says are finished or failed."""
+def _settled_task_texts(ledger: Ledger) -> set[str]:
+    """Task strings the ledger says are finished, failed, or stalled.
+
+    Stalled counts as settled for the auto-loop: re-running a capped
+    task immediately would just burn another 30 rounds on the same
+    stall. A human re-queues it with a refined issue instead.
+    """
     return {
         str(e.get("task", ""))
         for e in ledger.entries()
-        if e.get("event") in ("task_finished", "task_failed")
+        if e.get("event") in ("task_finished", "task_failed", "task_stalled")
         and e.get("task")
     }
+
+
+def _limit_hit(outputs: list[object]) -> str | None:
+    """Which Magentic limit a run hit ("round"/"reset"), or None.
+
+    The framework yields a completion message, not an exception, when
+    a limit is hit: "Workflow terminated due to reaching maximum
+    {round|reset} count." (agent_framework_orchestrations._magentic
+    _check_within_limits_or_complete). Match on that exact string —
+    it is the only signal the outputs carry.
+    """
+    for output in outputs:
+        text = str(output)
+        if "reaching maximum round count" in text:
+            return "round"
+        if "reaching maximum reset count" in text:
+            return "reset"
+    return None
 
 
 def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
@@ -65,12 +88,12 @@ def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
 
     First run: the default self-build task, unless it is already done.
     After that: the oldest open `crew-task` issue whose task is not
-    finished, failed, or already covered by a "[crew] Done:" issue.
-    A GitHub failure warns and returns None (sleep and retry) instead
-    of crashing the loop.
+    finished, failed, stalled, or already covered by a "[crew] Done:"
+    issue. A GitHub failure warns and returns None (sleep and retry)
+    instead of crashing the loop.
     """
     log = logging.getLogger("crew")
-    done = _done_task_texts(ledger)
+    done = _settled_task_texts(ledger)
     try:
         done |= list_done_tasks(config.repo)
     except Exception as exc:  # noqa: BLE001 - a poll failure is not fatal
@@ -113,6 +136,21 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
         return 1
 
     summary = "\n\n".join(str(o) for o in outputs) or "(no output)"
+    limit = _limit_hit(outputs)
+    if limit is not None:
+        # A cap termination is not a finish: the first self-build run
+        # hit the round cap, recorded task_finished, and posted a Done
+        # issue with zero PRs. Record it stalled and post a Stalled
+        # issue instead, so nobody mistakes it for done — and the loop
+        # does not spin on it (task_stalled is in the settled set).
+        _record(ledger, "task_stalled", task=task, limit=limit)
+        log.warning("task stalled (max %s count):\n%s", limit, summary)
+        try:
+            url = report_stalled(config.repo, task, summary)
+            log.info("stalled issue posted: %s", url)
+        except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+            print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+        return 1
     _record(ledger, "task_finished", task=task, outputs=outputs)
     log.info("task finished:\n%s", summary)
     try:

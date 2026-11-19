@@ -19,6 +19,11 @@ TASK_LABEL = "crew-task"
 # Prefix of the title of a "done" issue posted by report_done().
 DONE_TITLE_PREFIX = "[crew] Done: "
 
+# Prefix of the title of a "stalled" issue posted by report_stalled().
+# A stalled task is NOT done: the run hit the round/reset cap, so the
+# issue asks for a refined task instead of claiming completion.
+STALLED_TITLE_PREFIX = "[crew] Stalled: "
+
 
 def task_text(title: str, body: str = "") -> str:
     """The task string for an issue: title, plus body when there is one.
@@ -151,8 +156,39 @@ def report_done(repo: str, task: str, summary: str, pr_url: str = "") -> str:
     return open_issue(repo, payload["title"], payload["body"])
 
 
+def stalled_issue_payload(task: str, summary: str) -> dict:
+    """Pure payload for a "stalled" issue: title, body, labels. No gh call."""
+    if not task:
+        raise ValueError("task must not be empty")
+    if not summary:
+        raise ValueError("summary must not be empty")
+    lines = [
+        f"Task stalled: {task}",
+        "",
+        summary,
+        "",
+        "The run hit the round/reset cap before finishing, so this task "
+        "is not done and is not retried automatically. Re-queue it with "
+        "a refined crew-task issue (narrower scope, or a higher "
+        "CREW_MAX_ROUNDS).",
+    ]
+    return {
+        "title": f"[crew] Stalled: {task}",
+        "body": "\n".join(lines),
+        "labels": ["stalled"],
+    }
+
+
+def report_stalled(repo: str, task: str, summary: str) -> str:
+    """Post a "stalled" issue update when a task hits the round cap."""
+    payload = stalled_issue_payload(task, summary)
+    return open_issue(repo, payload["title"], payload["body"])
+
+
 __all__ = [
     "open_issue", "comment_issue", "ask_question", "report_done",
-    "done_issue_payload", "task_text", "list_task_issues",
+    "report_stalled", "done_issue_payload", "stalled_issue_payload",
+    "task_text", "list_task_issues",
     "list_done_tasks", "TASK_LABEL", "DONE_TITLE_PREFIX",
+    "STALLED_TITLE_PREFIX",
 ]

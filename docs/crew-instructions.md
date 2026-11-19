@@ -151,6 +151,12 @@ the interval) and takes the oldest one it has not already finished
 or failed. A task that failed is not retried automatically — it needs
 a new issue to re-queue it.
 
+A run is capped at 30 Magentic rounds (`CREW_MAX_ROUNDS` overrides).
+Hitting the cap is a stall, not a finish: the crew records
+`task_stalled` and posts a `[crew] Stalled:` issue, and the loop does
+not re-run the task on its own. Re-queue a stalled task with a
+refined issue — narrower scope, or a higher round cap.
+
 ## Orchestration (Magentic — verified against agent-framework 1.26.0)
 
 - Magentic lives in `agent_framework.orchestrations` — there is no

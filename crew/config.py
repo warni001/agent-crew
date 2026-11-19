@@ -51,7 +51,11 @@ class CrewConfig:
     # on the container app). Empty means the local file — the blob is
     # persistence, not a requirement.
     ledger_blob_url: str = ""
-    max_rounds: int = 10
+    # Round cap for one Magentic run. 10 was an arbitrary scaffold
+    # default and too small: the first self-build hit it and terminated
+    # with zero PRs. 30 fits real tasks; the $190 credit guard and the
+    # Saturday deadline still cap total spend.
+    max_rounds: int = 30
 
     @property
     def foundry_gpt_endpoint(self) -> str:
@@ -80,7 +84,7 @@ class CrewConfig:
             deadline_iso=env.get("CREW_DEADLINE", "2026-11-21T22:00:00Z"),
             ledger_path=env.get("CREW_LEDGER_PATH", "crew-ledger.jsonl"),
             ledger_blob_url=env.get("CREW_LEDGER_BLOB_URL", ""),
-            max_rounds=int(env.get("CREW_MAX_ROUNDS", "10")),
+            max_rounds=int(env.get("CREW_MAX_ROUNDS", "30")),
         )
 
     def validate(self) -> None:
