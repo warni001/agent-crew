@@ -1,4 +1,4 @@
-# Pinned exactly. agent-framework 1.26.1/1.26.2 were hijacked and removed
+# Pinned exactly. Two later versions were hijacked and removed
 # from PyPI — never install them, never use `latest` or a range here.
 # Verified against the installed package: 1.26.0 is the newest version
 # on the index and requires agent-framework-core[all]==1.26.0.

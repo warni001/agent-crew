@@ -13,6 +13,10 @@ from dataclasses import dataclass
 
 ALLOWED_REPO = "warni001/agent-crew"
 
+
+class ConfigError(ValueError):
+    """Raised when required config is missing or empty."""
+
 # FoundryChatClient (agent-framework 1.26.0, verified against the installed
 # package) builds an AIProjectClient from the project endpoint, so the
 # endpoint must be a Foundry *project* endpoint:
@@ -44,6 +48,11 @@ class CrewConfig:
     deadline_iso: str = "2026-11-21T22:00:00Z"
     ledger_path: str = "crew-ledger.jsonl"
     max_rounds: int = 10
+
+    @property
+    def foundry_gpt_endpoint(self) -> str:
+        """Alias for foundry_project_endpoint (the env var name)."""
+        return self.foundry_project_endpoint
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> CrewConfig:
@@ -94,3 +103,28 @@ class CrewConfig:
             problems.append("CREW_BUDGET_LIMIT_USD must be > 0")
         if problems:
             raise ValueError("; ".join(problems))
+
+
+# Short name used by docs and tests.
+Config = CrewConfig
+
+
+def load_config(env: dict[str, str] | None = None) -> CrewConfig:
+    """Load the three required vars from the environment.
+
+    Raises ConfigError naming the variable when one is missing or empty.
+    Does NOT read .env files and does NOT run validate(): the endpoint
+    shape check lives in validate() for actual runs.
+    """
+    env = os.environ if env is None else env
+    values: dict[str, str] = {}
+    for var in ("KEY_VAULT_URL", "FOUNDRY_GPT_ENDPOINT", "GITHUB_TOKEN"):
+        value = env.get(var, "")
+        if not value:
+            raise ConfigError(f"missing required config: {var}")
+        values[var] = value
+    return CrewConfig(
+        key_vault_url=values["KEY_VAULT_URL"],
+        foundry_project_endpoint=values["FOUNDRY_GPT_ENDPOINT"],
+        github_token=values["GITHUB_TOKEN"],
+    )

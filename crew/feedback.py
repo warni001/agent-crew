@@ -36,12 +36,26 @@ def ask_question(repo: str, question: str, context: str = "") -> str:
     return open_issue(repo, f"[crew] Question: {question[:80]}", body)
 
 
-def report_done(repo: str, task: str, summary: str, pr_url: str = "") -> str:
-    """Post a "done" issue update when a task finishes."""
+def done_issue_payload(task: str, summary: str, pr_url: str = "") -> dict:
+    """Pure payload for a "done" issue: title, body, labels. No gh call."""
+    if not task:
+        raise ValueError("task must not be empty")
+    if not summary:
+        raise ValueError("summary must not be empty")
     lines = [f"Task finished: {task}", "", summary]
     if pr_url:
         lines += ["", f"PR: {pr_url}"]
-    return open_issue(repo, f"[crew] Done: {task[:80]}", "\n".join(lines))
+    return {
+        "title": f"[crew] Done: {task}",
+        "body": "\n".join(lines),
+        "labels": ["done"],
+    }
 
 
-__all__ = ["open_issue", "comment_issue", "ask_question", "report_done"]
+def report_done(repo: str, task: str, summary: str, pr_url: str = "") -> str:
+    """Post a "done" issue update when a task finishes."""
+    payload = done_issue_payload(task, summary, pr_url)
+    return open_issue(repo, payload["title"], payload["body"])
+
+
+__all__ = ["open_issue", "comment_issue", "ask_question", "report_done", "done_issue_payload"]

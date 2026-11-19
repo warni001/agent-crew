@@ -43,7 +43,8 @@ def test_pin_is_exact_not_a_range(repo_root):
     text = req_file.read_text()
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("agent-framework"):
+        # Match the meta-package only, not agent-framework-core==1.26.0.
+        if stripped.startswith("agent-framework=="):
             assert stripped == "agent-framework==1.26.0", (
                 f"pin must be exact '==', got: {stripped!r}"
             )

@@ -64,11 +64,20 @@ def _run(cmd: list[str], timeout: int = 120) -> str:
     return out[:_MAX_OUTPUT]
 
 
+ALLOWED_REPOS = frozenset({ALLOWED_REPO})
+GHCR_IMAGE = "ghcr.io/warni001/agent-crew:latest"
+
+
 def _check_repo(repo: str) -> None:
     if repo != ALLOWED_REPO:
         raise ValueError(
             f"scope lock: crew works only in {ALLOWED_REPO}, not {repo!r}"
         )
+
+
+def assert_repo_allowed(repo: str) -> None:
+    """Public scope-lock check: raise ValueError for any other repo."""
+    _check_repo(repo)
 
 
 def _repo_root() -> Path:
@@ -217,5 +226,6 @@ __all__ = [
     "check_credit", "read_repo_file", "open_pr", "comment_on_pr", "merge_pr",
     "read_file", "write_file", "run_pytest", "run_shell",
     "record_sign_off", "check_review_sign_off",
+    "ALLOWED_REPOS", "GHCR_IMAGE", "assert_repo_allowed",
     "READ_TOOLS", "BUILD_TOOLS", "REVIEW_TOOLS", "MERGE_TOOLS", "ALL_TOOLS",
 ]
