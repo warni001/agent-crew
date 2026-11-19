@@ -9,8 +9,8 @@ param baseName = 'agent-crew'
 param location = 'westus3'
 param claudeLocation = 'eastus2'
 param deployModels = true
-param gptAstraCapacity = 10
-param gptSolCapacity = 10
+param gptAstraCapacity = 100
+param gptSolCapacity = 100
 param claudeCapacity = 10
 param claudeModelVersion = '1'
 
