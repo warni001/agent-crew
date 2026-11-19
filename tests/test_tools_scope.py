@@ -40,6 +40,17 @@ def test_ghcr_image_constant(tools_mod):
     assert tools_mod.GHCR_IMAGE == "ghcr.io/warni001/agent-crew:latest"
 
 
+def test_image_for_commit_is_sha_tagged(tools_mod):
+    assert tools_mod.image_for_commit("abc123") == (
+        "ghcr.io/warni001/agent-crew:sha-abc123"
+    )
+
+
+def test_image_for_commit_rejects_empty_sha(tools_mod):
+    with pytest.raises(ValueError):
+        tools_mod.image_for_commit("  ")
+
+
 @pytest.mark.parametrize("repo", ["warni001/agent-crew"])
 def test_allowed_repo_passes(tools_mod, repo):
     tools_mod.assert_repo_allowed(repo)  # must not raise

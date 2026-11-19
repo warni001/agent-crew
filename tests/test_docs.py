@@ -4,12 +4,15 @@ These tests run standalone — no ``crew/`` code needed — and must pass
 now. They pin the two rules the repo owner set:
 
 1. GHCR flow: crew writes code and opens PRs; CI merges; Actions
-   builds and pushes ``ghcr.io/warni001/agent-crew:latest`` with
-   ``GITHUB_TOKEN`` (``packages: write``); the Container App is then
-   updated to that image. The crew PAT stays Actions read-only and
-   the crew must never attempt a direct GHCR push with it. The
-   package must be made public after the first push so the Container
-   App can pull anonymously.
+   builds and pushes ``ghcr.io/warni001/agent-crew:latest`` and a
+   sha-tagged image with ``GITHUB_TOKEN`` (``packages: write``); the
+   Container App is then updated to the sha-tagged image with a unique
+   revision suffix — never ``:latest`` (an unchanged ``:latest``
+   string mints no new revision, and a ``:latest`` pull can resolve
+   stale). The crew PAT stays Actions read-only and the crew must
+   never attempt a direct GHCR push with it. The package must be made
+   public after the first push so the Container App can pull
+   anonymously.
 2. Ponytail: the full rules live in ``ponytail.md``, ``AGENTS.md``
    points the crew at them, and the Reviewer checks PRs against them.
 
@@ -24,7 +27,8 @@ import re
 GHCR_IMAGE = "ghcr.io/warni001/agent-crew:latest"
 UPDATE_CMD = (
     "az containerapp update -g rg-agent-crew -n ca-agent-crew "
-    f"--image {GHCR_IMAGE}"
+    "--image ghcr.io/warni001/agent-crew:sha-<commit-sha> "
+    "--revision-suffix <suffix>"
 )
 
 

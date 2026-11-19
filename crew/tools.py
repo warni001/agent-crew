@@ -68,6 +68,21 @@ ALLOWED_REPOS = frozenset({ALLOWED_REPO})
 GHCR_IMAGE = "ghcr.io/warni001/agent-crew:latest"
 
 
+def image_for_commit(sha: str) -> str:
+    """The image tag to deploy for a commit: an immutable sha tag.
+
+    Never deploy `:latest`: updating with an unchanged `:latest` string
+    mints no new Container Apps revision, and a `:latest` pull can
+    resolve to a stale cached manifest. A sha tag can only ever point
+    at one digest, so both problems go away. Pair it with a unique
+    `--revision-suffix` on the update.
+    """
+    sha = sha.strip()
+    if not sha:
+        raise ValueError("commit sha must not be empty")
+    return f"ghcr.io/warni001/agent-crew:sha-{sha}"
+
+
 def _check_repo(repo: str) -> None:
     if repo != ALLOWED_REPO:
         raise ValueError(
@@ -226,6 +241,6 @@ __all__ = [
     "check_credit", "read_repo_file", "open_pr", "comment_on_pr", "merge_pr",
     "read_file", "write_file", "run_pytest", "run_shell",
     "record_sign_off", "check_review_sign_off",
-    "ALLOWED_REPOS", "GHCR_IMAGE", "assert_repo_allowed",
+    "ALLOWED_REPOS", "GHCR_IMAGE", "image_for_commit", "assert_repo_allowed",
     "READ_TOOLS", "BUILD_TOOLS", "REVIEW_TOOLS", "MERGE_TOOLS", "ALL_TOOLS",
 ]

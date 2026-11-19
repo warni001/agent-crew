@@ -34,7 +34,14 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/warni001/agent-crew:latest
+          # Immutable tag per commit, plus latest for convenience. Deploys
+          # must use the sha tag: updating with an unchanged `:latest`
+          # string creates no new Container Apps revision, and a `:latest`
+          # pull can resolve to a stale cached manifest. A sha tag can
+          # only ever point at one digest, so both problems go away.
+          tags: |
+            ghcr.io/warni001/agent-crew:latest
+            ghcr.io/warni001/agent-crew:sha-${{ github.sha }}
 
       # A missing tool used to ship silently (gh, git, pytest were all
       # absent from the image) and only fail in Azure. Fail here instead.

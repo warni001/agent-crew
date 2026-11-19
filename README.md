@@ -210,11 +210,16 @@ GHCR push never uses the crew token. The flow is:
 2. CI merges (tests, Reviewer sign-off, CI green).
 3. GitHub Actions builds the image and pushes it with
    `GITHUB_TOKEN` (`packages: write`):
-   `ghcr.io/warni001/agent-crew:latest`.
-4. The Container App is updated to that image:
+   `ghcr.io/warni001/agent-crew:latest` and
+   `ghcr.io/warni001/agent-crew:sha-<commit-sha>`.
+4. The Container App is updated to the sha-tagged image, with a unique
+   revision suffix. Never deploy `:latest`: updating with an unchanged
+   `:latest` string mints no new revision, and a `:latest` pull can
+   resolve to a stale cached manifest. A sha tag can only ever point
+   at one digest.
 
    ```bash
-   az containerapp update -g rg-agent-crew -n ca-agent-crew --image ghcr.io/warni001/agent-crew:latest
+   az containerapp update -g rg-agent-crew -n ca-agent-crew --image ghcr.io/warni001/agent-crew:sha-<commit-sha> --revision-suffix <suffix>
    ```
 
 The crew must not attempt a direct GHCR push with its token — a
