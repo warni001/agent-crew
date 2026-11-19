@@ -34,6 +34,11 @@ jobs:
         with:
           context: .
           push: true
+          # Layer cache: hosted runners are fresh VMs, so without this
+          # every build reinstalls everything from scratch (~2.5 min).
+          # The Actions cache keeps unchanged layers between runs.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           # Immutable tag per commit, plus latest for convenience. Deploys
           # must use the sha tag: updating with an unchanged `:latest`
           # string creates no new Container Apps revision, and a `:latest`
@@ -71,6 +76,11 @@ jobs:
       contents: read
       actions: read
     steps:
+      # The `gh` CLI resolves the repo from the checkout; without this
+      # step it fails with "not a git repository" (first live deploy
+      # run, 2026-11-19).
+      - uses: actions/checkout@v4
+
       - name: Wait for CI on this commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
