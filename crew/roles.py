@@ -1,0 +1,152 @@
+"""Role agents. One frontier model per role, Magentic manager included.
+
+Planner + Reviewer run on Astra; Builder + Merger run on Sol; the
+Magentic manager runs on Astra. Deployment names (gpt-6-2-astra /
+gpt-6-2-sol) come from config, overridable by env.
+
+All API use below was verified against the installed agent-framework
+1.26.0 package (Agent, FoundryChatClient, MagenticBuilder) — not written
+from memory. No live Foundry call has been made; the client wiring is
+untested against the live endpoint.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from agent_framework import Agent
+from agent_framework.foundry import FoundryChatClient
+from azure.identity import DefaultAzureCredential
+
+from .config import CrewConfig
+from .tools import BUILD_TOOLS, MERGE_TOOLS, READ_TOOLS, REVIEW_TOOLS
+
+PONYTAIL_CHECKLIST = """Ponytail rules — check every PR against these:
+1. Does it need to exist? Skip features nobody asked for.
+2. Reuse what is already in the codebase.
+3. Stdlib / platform feature before a new dependency.
+4. Installed dependency before adding one.
+5. One line a reader gets at a glance, when that fully works.
+6. Otherwise the minimum code that works.
+No abstraction, config, or boilerplate "for later". Deletion beats
+addition. Never cut trust-boundary validation, data-loss handling,
+security, accessibility, or anything explicitly asked for. A shortcut
+with a known limit is marked `shortcut: <limit>, <when to upgrade>`.
+Follow the established convention first; a new pattern only when the
+convention fails."""
+
+_SCOPE = (
+    "Scope lock: work only in warni001/agent-crew. Refuse any other repo, "
+    "any other codebase, and any request to push an image to GHCR — GHCR "
+    "push happens only via the GitHub Actions workflow, never from crew code."
+)
+_CREDIT = (
+    "Before spending any model effort, call check_credit. If it says STOP, "
+    "stop immediately and say so; do not start or continue work."
+)
+_VOICE = "Address the reader as 'you' or state things impersonally."
+
+_PLANNER_INSTRUCTIONS = f"""You plan coding tasks for this repo. Break the task into the smallest
+complete steps, in order, naming the files each step touches. Keep it
+minimal: the smallest change that fully works. {_SCOPE} {_CREDIT} {_VOICE}"""
+
+_BUILDER_INSTRUCTIONS = f"""You implement the plan in the local checkout. Write the minimum code
+that works, reusing what is already there. Run the test suite with
+run_pytest before opening a PR — if tests fail, fix them; never open a
+PR on red. Open the PR with open_pr only after tests pass. {_SCOPE}
+{_CREDIT} {_VOICE}"""
+
+_REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Check the diff against
+the Ponytail checklist below, verify tests passed, and verify nothing
+outside the task scope crept in. Record your verdict with
+record_sign_off (verdict 'approved' or 'changes_requested', with notes).
+Only an 'approved' sign-off lets the merger proceed. {_SCOPE} {_CREDIT}
+{_VOICE}
+
+{{ponytail}}"""
+
+_MERGER_INSTRUCTIONS = f"""You merge approved pull requests. Before merging, call
+check_review_sign_off for the PR number — merge only when a reviewer
+sign-off with verdict 'approved' is recorded. If there is none, do not
+merge; say what is missing. {_SCOPE} {_CREDIT} {_VOICE}"""
+
+_MANAGER_INSTRUCTIONS = f"""You coordinate the crew: hand the task to the planner, then the
+builder, then the reviewer, then the merger, in that order. Keep rounds
+tight — stop when the work is done or the credit check says STOP. If a
+step is blocked, ask a question via an issue and move on; never wait.
+{_SCOPE} {_CREDIT} {_VOICE}"""
+
+
+def load_ponytail(repo_root: str | Path = ".") -> str:
+    """Ponytail rules from ponytail.md in the repo root, if present.
+
+    Falls back to the checklist embedded above — this repo has no
+    ponytail.md at its root yet, so the embedded checklist is what
+    ships today.
+    """
+    path = Path(repo_root) / "ponytail.md"
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    return PONYTAIL_CHECKLIST
+
+
+def make_chat_client(config: CrewConfig, model: str) -> FoundryChatClient:
+    """Foundry chat client for one model deployment.
+
+    Auth is Entra ID via DefaultAzureCredential (the container app's
+    managed identity at runtime). No key or token is handled here.
+    """
+    return FoundryChatClient(
+        project_endpoint=config.foundry_project_endpoint,
+        model=model,
+        credential=DefaultAzureCredential(),
+    )
+
+
+def build_roles(config: CrewConfig) -> dict[str, Agent]:
+    """The four role agents plus the Magentic manager agent."""
+    ponytail = load_ponytail()
+    planner = Agent(
+        make_chat_client(config, config.planner_model),
+        instructions=_PLANNER_INSTRUCTIONS,
+        name="planner",
+        tools=READ_TOOLS,
+    )
+    builder = Agent(
+        make_chat_client(config, config.builder_model),
+        instructions=_BUILDER_INSTRUCTIONS,
+        name="builder",
+        tools=BUILD_TOOLS,
+    )
+    reviewer = Agent(
+        make_chat_client(config, config.reviewer_model),
+        instructions=_REVIEWER_INSTRUCTIONS.format(ponytail=ponytail),
+        name="reviewer",
+        tools=REVIEW_TOOLS,
+    )
+    merger = Agent(
+        make_chat_client(config, config.merger_model),
+        instructions=_MERGER_INSTRUCTIONS,
+        name="merger",
+        tools=MERGE_TOOLS,
+    )
+    manager = Agent(
+        make_chat_client(config, config.manager_model),
+        instructions=_MANAGER_INSTRUCTIONS,
+        name="manager",
+    )
+    return {
+        "planner": planner,
+        "builder": builder,
+        "reviewer": reviewer,
+        "merger": merger,
+        "manager": manager,
+    }
+
+
+__all__ = [
+    "PONYTAIL_CHECKLIST",
+    "build_roles",
+    "load_ponytail",
+    "make_chat_client",
+]
