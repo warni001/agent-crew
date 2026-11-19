@@ -25,6 +25,7 @@ import time
 from .config import CrewConfig
 from .credit import stop_reason
 from .feedback import list_done_tasks, list_task_issues, report_done
+from .blob_ledger import build_ledger
 from .ledger import Ledger
 from .orchestration import build_workflow, run_task
 
@@ -147,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
 
-    ledger = Ledger(config.ledger_path)
+    ledger = build_ledger(config)
 
     # One-shot mode: an explicit task runs once and exits.
     if args.task:

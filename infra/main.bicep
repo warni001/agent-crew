@@ -18,6 +18,12 @@
 //     runs the crew. It starts on a public placeholder image; shipping
 //     the crew's own image is the crew's first task (see README).
 //   Log Analytics workspace (shared by Container Apps + the Logic App).
+//   Storage account (Hot, LRS) holding the run ledger as an append
+//     blob, so a deploy restart no longer wipes it. The container
+//     app's identity gets Storage Blob Data Contributor on it; the
+//     blob URL reaches the app as CREW_LEDGER_BLOB_URL. Cost is
+//     fractions of a cent at this scale (kilobytes, a handful of
+//     writes per task).
 //   Kill switch (the spend cutoff): a $200 Cost Management budget on the
 //     crew resource group, an Action Group, and a Logic App that deletes
 //     the crew resource group. The budget fires the Logic App at 95%
@@ -95,6 +101,8 @@ var claudeAccountName = 'foundry-claude-${take(suffix, 8)}'
 var logAnalyticsName = 'log-${baseName}'
 var containerEnvName = 'cae-${baseName}'
 var containerAppName = 'ca-${baseName}'
+var storageAccountName = 'st${replace(baseName, '-', '')}${take(suffix, 8)}'
+var ledgerBlobUrl = 'https://${storageAccountName}.blob.${environment().suffixes.storage}/ledger/crew-ledger.jsonl'
 var logicAppName = 'logic-${baseName}-killswitch'
 var actionGroupName = 'ag-${baseName}-killswitch'
 var budgetName = 'budget-${baseName}'
@@ -103,6 +111,7 @@ var budgetName = 'budget-${baseName}'
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908'
 var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // Key Vault: RBAC authorization, purge protection on. No secrets are
 // created by this template; deploy.sh stores the GitHub token after
@@ -277,6 +286,31 @@ resource sonnetDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025
   ]
 }
 
+// Storage account for the run ledger (append blob). Hot tier, LRS —
+// the ledger is kilobytes; there is no reason to pay for anything
+// else. Public blob access is off; the crew reaches it with Entra ID.
+resource ledgerStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: storageAccountName
+  location: location
+  kind: 'StorageV2'
+  sku: {
+    name: 'Standard_LRS'
+  }
+  properties: {
+    accessTier: 'Hot'
+    allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+resource ledgerContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  name: '${ledgerStorage.name}/default/ledger'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // Container Apps: the crew's runtime. One always-on replica, no
 // ingress (nothing calls into the crew). It starts on a public
 // placeholder image — shipping the crew's own image is the crew's
@@ -342,6 +376,13 @@ resource crewApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: gptProjectEndpoint
             }
             {
+              // The run ledger lives in this append blob so it
+              // survives container restarts and redeploys. The URL
+              // is not a secret; unset means the local file.
+              name: 'CREW_LEDGER_BLOB_URL'
+              value: ledgerBlobUrl
+            }
+            {
               name: 'FOUNDRY_CLAUDE_ENDPOINT'
               value: claudeAccount.properties.endpoint
             }
@@ -404,6 +445,17 @@ resource crewRgAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(resourceGroup().id, crewApp.id, contributorRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', contributorRoleId)
+    principalId: crewApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// The crew writes its run ledger to the append blob with Entra ID.
+resource crewLedgerAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(ledgerStorage.id, crewApp.id, storageBlobDataContributorRoleId)
+  scope: ledgerStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
     principalId: crewApp.identity.principalId
     principalType: 'ServicePrincipal'
   }
@@ -573,6 +625,8 @@ output gptProjectEndpoint string = gptProjectEndpoint
 output claudeAccountName string = claudeAccount.name
 output claudeEndpoint string = claudeAccount.properties.endpoint
 output containerAppName string = crewApp.name
+output ledgerStorageAccountName string = ledgerStorage.name
+output ledgerBlobUrl string = ledgerBlobUrl
 output logicAppName string = logicApp.name
 output actionGroupName string = actionGroup.name
 output budgetName string = budget.name

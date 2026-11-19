@@ -47,6 +47,10 @@ class CrewConfig:
     # Hard deadline: Sat Nov 21 5pm ET == 22:00 UTC.
     deadline_iso: str = "2026-11-21T22:00:00Z"
     ledger_path: str = "crew-ledger.jsonl"
+    # Append-blob URL for the run ledger (bicep sets CREW_LEDGER_BLOB_URL
+    # on the container app). Empty means the local file — the blob is
+    # persistence, not a requirement.
+    ledger_blob_url: str = ""
     max_rounds: int = 10
 
     @property
@@ -75,6 +79,7 @@ class CrewConfig:
             budget_spent_usd=float(env.get("CREW_BUDGET_SPENT_USD", "0")),
             deadline_iso=env.get("CREW_DEADLINE", "2026-11-21T22:00:00Z"),
             ledger_path=env.get("CREW_LEDGER_PATH", "crew-ledger.jsonl"),
+            ledger_blob_url=env.get("CREW_LEDGER_BLOB_URL", ""),
             max_rounds=int(env.get("CREW_MAX_ROUNDS", "10")),
         )
 

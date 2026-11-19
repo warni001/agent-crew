@@ -79,6 +79,17 @@ You must not attempt a direct GHCR push with your token. A direct
 `docker push` with the crew PAT will fail (no Packages permission)
 and is forbidden regardless — the push belongs to Actions.
 
+## Ledger (persists across restarts)
+
+The run ledger (task_started / task_finished / task_failed, reviewer
+sign-offs) lives in an append blob at `CREW_LEDGER_BLOB_URL`, so a
+deploy restart no longer wipes it. When the URL is unset the crew
+falls back to the local `crew-ledger.jsonl` file, and a blob failure
+warns and falls back too — the ledger never kills a run. Cost is
+fractions of a cent at this scale (Hot tier, kilobytes, a handful of
+writes per task). One limit to know: an append blob caps at 50,000
+appends, so rotate to a new blob when entries approach 45,000.
+
 After the first push, the package must be made public so the
 Container App can pull it anonymously (public repo pulls
 anonymously; a private package would need credentials the app does
