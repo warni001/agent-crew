@@ -3,8 +3,8 @@
 # with GITHUB_TOKEN only (permissions: packages: write below) — never the
 # crew PAT, and never a direct `docker push` from a machine.
 #
-# After the first push, make the package public in the GHCR package settings
-# so the Container App can pull it anonymously.
+# The package is public because the repo is public (GHCR images inherit
+# the repo's visibility), so the Container App can pull it anonymously.
 
 name: Build and push crew image
 
@@ -35,3 +35,10 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/warni001/agent-crew:latest
+
+      # A missing tool used to ship silently (gh, git, pytest were all
+      # absent from the image) and only fail in Azure. Fail here instead.
+      - name: Smoke test the image
+        run: |
+          docker run --rm ghcr.io/warni001/agent-crew:latest which gh git pytest
+          docker run --rm ghcr.io/warni001/agent-crew:latest python -m crew --help

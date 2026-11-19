@@ -7,8 +7,101 @@ waiting for an answer. When a task finishes, `report_done` posts a
 
 from __future__ import annotations
 
+import json
+import subprocess
+
 from .config import ALLOWED_REPO
 from .tools import _check_repo, _run
+
+# Label an issue carries when it is a task for the crew to pick up.
+TASK_LABEL = "crew-task"
+
+# Prefix of the title of a "done" issue posted by report_done().
+DONE_TITLE_PREFIX = "[crew] Done: "
+
+
+def task_text(title: str, body: str = "") -> str:
+    """The task string for an issue: title, plus body when there is one.
+
+    This exact string is what the crew runs and what lands in the ledger,
+    so the loop can tell a queued task from one already finished.
+    """
+    title = title.strip()
+    body = (body or "").strip()
+    return f"{title}\n\n{body}" if body else title
+
+
+def _gh_json(repo: str, args: list[str]) -> list[dict]:
+    """Run `gh` with `--json` and parse its stdout as a JSON list.
+
+    Raises RuntimeError on a non-zero exit or unparsable output. Uses
+    subprocess directly (not tools._run) because issue bodies can exceed
+    _run's output cap and truncate the JSON.
+    """
+    proc = subprocess.run(
+        ["gh", *args, "--repo", repo],
+        capture_output=True, text=True, timeout=60,
+    )
+    out = (proc.stdout + proc.stderr).strip()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"gh {' '.join(args[:2])} failed (exit {proc.returncode}): "
+            f"{out[:500]}"
+        )
+    try:
+        parsed = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"could not parse gh output: {exc}")
+    if not isinstance(parsed, list):
+        raise RuntimeError("gh output was not a JSON list")
+    return parsed
+
+
+def list_task_issues(repo: str) -> list[dict]:
+    """Open issues labelled `crew-task`, oldest first.
+
+    Each entry: {"number": int, "title": str, "body": str, "task": str}.
+    `gh issue list` returns newest first, so the list is reversed.
+    """
+    _check_repo(repo)
+    rows = _gh_json(
+        repo,
+        ["issue", "list", "--label", TASK_LABEL, "--state", "open",
+         "--limit", "20", "--json", "number,title,body"],
+    )
+    out = [
+        {
+            "number": row.get("number"),
+            "title": row.get("title", ""),
+            "body": row.get("body", ""),
+            "task": task_text(row.get("title", ""), row.get("body", "")),
+        }
+        for row in rows
+    ]
+    out.reverse()
+    return out
+
+
+def list_done_tasks(repo: str) -> set[str]:
+    """Task strings that already have an open "[crew] Done:" issue.
+
+    The ledger lives in the container's filesystem and does not survive
+    a replica restart, so the done issues on GitHub are the durable
+    record of what is finished. The caller strips the title prefix to
+    recover the task string.
+    """
+    _check_repo(repo)
+    rows = _gh_json(
+        repo,
+        ["issue", "list", "--state", "open", "--search", DONE_TITLE_PREFIX,
+         "--limit", "50", "--json", "title"],
+    )
+    done = set()
+    for row in rows:
+        title = row.get("title", "")
+        if title.startswith(DONE_TITLE_PREFIX):
+            done.add(title[len(DONE_TITLE_PREFIX):])
+    return done
 
 
 def open_issue(repo: str, title: str, body: str) -> str:
@@ -58,4 +151,8 @@ def report_done(repo: str, task: str, summary: str, pr_url: str = "") -> str:
     return open_issue(repo, payload["title"], payload["body"])
 
 
-__all__ = ["open_issue", "comment_issue", "ask_question", "report_done", "done_issue_payload"]
+__all__ = [
+    "open_issue", "comment_issue", "ask_question", "report_done",
+    "done_issue_payload", "task_text", "list_task_issues",
+    "list_done_tasks", "TASK_LABEL", "DONE_TITLE_PREFIX",
+]

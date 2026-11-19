@@ -85,6 +85,12 @@ param killSwitchTime string = '2026-11-21T22:00:00Z'
 var suffix = uniqueString(resourceGroup().id)
 var vaultName = 'kv-${replace(baseName, '-', '')}-${take(suffix, 8)}'
 var gptAccountName = 'foundry-gpt-${take(suffix, 8)}'
+var gptProjectName = 'crew'
+// FoundryChatClient needs a Foundry *project* endpoint, not the
+// Cognitive Services account endpoint: the account endpoint is rejected
+// by crew/config.py validation. The project endpoint is built from the
+// account name and the project name (no .env value for this).
+var gptProjectEndpoint = 'https://${gptAccountName}.services.ai.azure.com/api/projects/${gptProjectName}'
 var claudeAccountName = 'foundry-claude-${take(suffix, 8)}'
 var logAnalyticsName = 'log-${baseName}'
 var containerEnvName = 'cae-${baseName}'
@@ -151,7 +157,7 @@ resource gptAccount 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = 
 
 resource gptProject 'Microsoft.CognitiveServices/accounts/projects@2025-10-01-preview' = {
   parent: gptAccount
-  name: 'crew'
+  name: gptProjectName
   location: location
   identity: {
     type: 'SystemAssigned'
@@ -300,6 +306,16 @@ resource crewApp 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: containerEnv.id
     configuration: {
       activeRevisionsMode: 'Single'
+      // The crew's GitHub token, read from the vault at runtime by the
+      // app's own identity (Key Vault Secrets User, granted below).
+      // No token value is ever in this template or in the image.
+      secrets: [
+        {
+          name: 'githubtoken'
+          keyVaultUrl: '${vault.properties.vaultUri}secrets/GitHubToken'
+          identity: 'system'
+        }
+      ]
     }
     template: {
       containers: [
@@ -320,8 +336,24 @@ resource crewApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: gptAccount.properties.endpoint
             }
             {
+              // The endpoint the crew actually uses: config prefers
+              // FOUNDRY_PROJECT_ENDPOINT over the account endpoint.
+              name: 'FOUNDRY_PROJECT_ENDPOINT'
+              value: gptProjectEndpoint
+            }
+            {
               name: 'FOUNDRY_CLAUDE_ENDPOINT'
               value: claudeAccount.properties.endpoint
+            }
+            {
+              // The crew config reads GITHUB_TOKEN; the gh CLI reads
+              // GH_TOKEN. Both come from the same vault secret.
+              name: 'GITHUB_TOKEN'
+              secretRef: 'githubtoken'
+            }
+            {
+              name: 'GH_TOKEN'
+              secretRef: 'githubtoken'
             }
           ]
         }
@@ -537,6 +569,7 @@ output keyVaultUrl string = vault.properties.vaultUri
 output keyVaultName string = vault.name
 output gptAccountName string = gptAccount.name
 output gptEndpoint string = gptAccount.properties.endpoint
+output gptProjectEndpoint string = gptProjectEndpoint
 output claudeAccountName string = claudeAccount.name
 output claudeEndpoint string = claudeAccount.properties.endpoint
 output containerAppName string = crewApp.name

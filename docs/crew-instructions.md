@@ -82,8 +82,13 @@ another repo is rejected before it runs. There are no exceptions.
 ## Config (environment only)
 
 - `KEY_VAULT_URL` — Key Vault holding `GitHubToken`
-- `FOUNDRY_GPT_ENDPOINT` — `https://foundry-gpt-vaxvu3c2.cognitiveservices.azure.com/`
-- `GITHUB_TOKEN` — the crew PAT, from the vault at runtime
+- `FOUNDRY_PROJECT_ENDPOINT` — `https://foundry-gpt-vaxvu3c2.services.ai.azure.com/api/projects/crew`
+  (the Foundry *project* endpoint — the bare account endpoint
+  `https://foundry-gpt-vaxvu3c2.cognitiveservices.azure.com/` is rejected
+  by config validation; `FOUNDRY_GPT_ENDPOINT` is kept only as a fallback
+  name for the same project endpoint value)
+- `GITHUB_TOKEN` — the crew PAT, set from the vault by the Container App
+  secret ref (the `gh` CLI reads the same secret as `GH_TOKEN`)
 
 No secrets in code. No `.env` reads. A missing variable is a hard
 error naming the variable.
@@ -101,7 +106,7 @@ error naming the variable.
 
 - Planner + Reviewer: GPT-6.2 Astra, version `2026-11-17`, westus3
 - Builder + Merger: GPT-6.2 Sol, version `2026-11-17`, westus3
-- Endpoint: `https://foundry-gpt-vaxvu3c2.cognitiveservices.azure.com/`
+- Endpoint: `https://foundry-gpt-vaxvu3c2.services.ai.azure.com/api/projects/crew` (project `crew`)
 - No Claude in this subscription (PAYG ineligible for Claude in
   Foundry). Do not attempt a Claude deployment.
 - `agent-framework==1.26.0` exactly — versions 1.26.1/1.26.2 were
@@ -115,6 +120,12 @@ this file. Keep improving v1 until the next task arrives through an
 issue. The next project after v1 is the ResumeBot multi-tenant
 platform (a separate private repo) — it arrives through an issue
 when v1 is ready.
+
+Tasks arrive as GitHub issues labelled `crew-task` in this repo; the
+crew polls for them every 60 seconds (`CREW_POLL_SECONDS` overrides
+the interval) and takes the oldest one it has not already finished
+or failed. A task that failed is not retried automatically — it needs
+a new issue to re-queue it.
 
 ## Orchestration (Magentic — verified against agent-framework 1.26.0)
 
@@ -156,12 +167,13 @@ in the same PR.
   `agent_framework_foundry.FoundryChatClient`, keyword-only args
   `project_endpoint=...`, `model=...` (deployment name, e.g.
   `gpt-6.2-astra`), `credential=...`.
-  UNVERIFIED — flag, do not assume: `FoundryChatClient` takes a
-  Foundry *project* endpoint, and it is not yet established whether
-  `FOUNDRY_GPT_ENDPOINT` (the bare account endpoint) maps directly
-  to `project_endpoint` or needs the project path appended. Verify
-  against the Foundry docs / a live project before wiring it; the
-  test only pins the factory-injection seam, never the live call.
+  `FoundryChatClient` takes a Foundry *project* endpoint, so
+  `FOUNDRY_PROJECT_ENDPOINT` is what the container is given (see
+  Config above); the bare account endpoint does not work here.
+  UNVERIFIED live: the project endpoint and the deployment names
+  have not yet been exercised against a live Foundry call — the
+  first live run is the verification. The test only pins the
+  factory-injection seam, never the live call.
 
 ## How to run locally
 
