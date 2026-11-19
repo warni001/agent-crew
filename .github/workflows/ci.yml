@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Reject hijacked agent-framework versions
+        # 1.26.1/1.26.2 were hijacked and removed from PyPI — never install
+        # them. requirements.txt pins 1.26.0; this fails CI if a bad version
+        # slips in through any other path.
+        run: python -c "import importlib.metadata; v = importlib.metadata.version('agent-framework'); assert v not in ('1.26.1', '1.26.2'), f'hijacked agent-framework {v} installed'; print(f'agent-framework {v} ok')"
+
+      - name: Run tests
+        run: pytest
