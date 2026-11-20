@@ -193,7 +193,7 @@ def test_crew_instructions_states_classic_endpoint(repo_root):
     text = _read(repo_root, "docs/crew-instructions.md")
     assert "OpenAIChatClient" in text
     assert "azure_endpoint" in text
-    assert "2025-04-01-preview" in text
+    assert 'api_version="preview"' in text
     assert "FoundryChatClient" not in text
     assert "UNVERIFIED" not in text
 

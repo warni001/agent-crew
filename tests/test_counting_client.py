@@ -173,5 +173,5 @@ def test_make_chat_client_builds_counting_client(clients_mod, roles_mod, monkeyp
     roles_mod.make_chat_client(config, "gpt-6-2-sol")
     assert made["model"] == "gpt-6-2-sol"
     assert made["azure_endpoint"] == config.resolve_azure_openai_endpoint()
-    assert made["api_version"] == "2025-04-01-preview"
+    assert made["api_version"] == "preview"
     assert "credential" in made

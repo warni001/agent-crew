@@ -207,7 +207,7 @@ in the same PR.
   keyword-only args `model=...` (deployment name, e.g.
   `gpt-6.2-astra`), `azure_endpoint=...` (the classic Azure OpenAI
   endpoint, `https://foundry-gpt-vaxvu3c2.openai.azure.com`),
-  `credential=...`, `api_version="2025-04-01-preview"`.
+  `credential=...`, `api_version="preview"`.
   Chat calls go to the classic endpoint, NOT the Foundry project
   endpoint: proven live Nov 19, the project endpoint returns HTTP
   200 with zero usage and no message output even for "Say hello",

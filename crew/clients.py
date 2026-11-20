@@ -23,12 +23,16 @@ from agent_framework_openai import OpenAIChatClient
 
 from .spend import TRACKER, SpendLimitExceeded, record_usage, spent_usd
 
-# The exact combination the Nov 19 live sweep proved: the classic
-# endpoint with this API version. OpenAIChatClient's default API
-# version is "preview" (agent-framework-openai 1.18.2,
-# DEFAULT_AZURE_OPENAI_RESPONSES_API_VERSION), so it must be passed
-# explicitly — do not drop it.
-AZURE_OPENAI_API_VERSION = "2025-04-01-preview"
+# The exact combination the Nov 19 live probes proved: the classic
+# endpoint with api_version "preview". OpenAIChatClient's Azure
+# routing always builds the /openai/v1 base URL, and Azure only
+# accepts api-version=preview there — the dated 2025-04-01-preview
+# 400s ("API version not supported"). That dated version only works
+# on the legacy /openai path, which the framework never uses.
+# "preview" is also the SDK default
+# (DEFAULT_AZURE_OPENAI_RESPONSES_API_VERSION), but pass it
+# explicitly so the version is pinned, not inherited — do not drop it.
+AZURE_OPENAI_API_VERSION = "preview"
 
 
 class CountingChatClient(OpenAIChatClient):

@@ -18,8 +18,8 @@ not from memory or training data. What inspection established:
   overload keyword-only args: ``OpenAIChatClient(*, model=None,
   azure_endpoint=None, credential=None, api_version=None, ...)``.
   The classic endpoint (``https://<account>.openai.azure.com``)
-  with ``api_version="2025-04-01-preview"`` is the combination the
-  Nov 19 live sweep proved: the Foundry project endpoint returns
+  with ``api_version="preview"`` is the combination the
+  Nov 19 live probes proved: the Foundry project endpoint returns
   hollow 200s (zero usage, no message output) while the classic
   endpoint returns real text. No test here calls the network.
 
@@ -113,10 +113,11 @@ def test_openai_chat_client_azure_signature():
         assert sig.parameters[kw].kind == inspect.Parameter.KEYWORD_ONLY, kw
 
 
-def test_openai_default_api_version_is_preview_not_proven():
-    """The SDK default API version is "preview" — the proven
-    2025-04-01-preview must be passed explicitly (see
-    crew/clients.py AZURE_OPENAI_API_VERSION)."""
+def test_openai_default_api_version_is_preview():
+    """The SDK default API version is "preview" — the same value the
+    Nov 19 live probe proved on the /openai/v1 path. It is passed
+    explicitly anyway (see crew/clients.py AZURE_OPENAI_API_VERSION)
+    so the version is pinned, not inherited."""
     _real_sdk()
     if importlib.util.find_spec("agent_framework_openai") is None:
         pytest.skip("agent-framework-openai not installed")

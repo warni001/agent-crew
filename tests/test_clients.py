@@ -24,7 +24,7 @@ import pytest
 from conftest import require_crew
 
 CLASSIC_ENDPOINT = "https://foundry-gpt-vaxvu3c2.openai.azure.com"
-PROVEN_API_VERSION = "2025-04-01-preview"
+PROVEN_API_VERSION = "preview"
 
 
 @pytest.fixture
@@ -80,8 +80,8 @@ def test_mocked_client_returns_canned_reply_without_network(
 def test_default_factory_builds_openai_client_on_classic_endpoint(clients_mod):
     """Construction only — no network, no token fetch at construction.
 
-    Pins the exact combination the Nov 19 live sweep proved: the
-    classic endpoint with api_version 2025-04-01-preview.
+    Pins the exact combination the Nov 19 live probes proved: the
+    classic endpoint with api_version "preview".
     """
     from agent_framework_openai import OpenAIChatClient
 

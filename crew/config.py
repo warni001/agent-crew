@@ -25,7 +25,7 @@ class ConfigError(ValueError):
 # while the classic endpoint returns real text and the ledger prompt
 # returns valid JSON with no format forcing. OpenAIChatClient
 # (agent-framework-openai 1.18.2) takes the classic endpoint as
-# azure_endpoint with api_version 2025-04-01-preview (see
+# azure_endpoint with api_version "preview" (see
 # crew/clients.py). FOUNDRY_PROJECT_ENDPOINT is still set by bicep;
 # the classic endpoint is derived from it when AZURE_OPENAI_ENDPOINT
 # is unset, so no bicep change is needed.
