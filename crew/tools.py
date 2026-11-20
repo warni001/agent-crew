@@ -15,7 +15,6 @@ escape it. No tool ever prints or returns a token.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import shlex
@@ -42,11 +41,13 @@ _SHELL_ALLOWED_PREFIXES = (
 )
 
 
-def _run(cmd: list[str], timeout: int = 120) -> str:
+def _run(cmd: list[str], timeout: int = 120, max_output: int | None = _MAX_OUTPUT) -> str:
     """Run a command (no shell), return stdout, raise on failure.
 
     Never pass secrets in `cmd` and never log the environment: `gh`
-    reads GH_TOKEN from the environment itself.
+    reads GH_TOKEN from the environment itself. Output is truncated
+    to `max_output` chars (default 4000) — pass a larger cap, or
+    None for no cap, when the full output is the point (file reads).
     """
     try:
         proc = subprocess.run(
@@ -60,7 +61,7 @@ def _run(cmd: list[str], timeout: int = 120) -> str:
             f"{' '.join(cmd[:3])} failed (exit {proc.returncode}): "
             f"{out[:_MAX_OUTPUT]}"
         )
-    return out[:_MAX_OUTPUT]
+    return out if max_output is None else out[:max_output]
 
 
 ALLOWED_REPOS = frozenset({ALLOWED_REPO})
@@ -105,18 +106,36 @@ def _inside_repo(path: str) -> Path:
     return target
 
 
+# Cap for a single file read: ~100KB of source. Bounds a pathological
+# read while covering every file in this repo with room to spare.
+_READ_MAX_OUTPUT = 100_000
+
+
 def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
-    """Read a file from the repo at a ref, via the gh CLI."""
+    """Read a file from the repo at a ref, via the gh CLI (raw content).
+
+    Raw, not base64: the old path decoded `.content`, and `_run`'s
+    4000-char cap cut any file over ~3KB mid-string, so b64decode
+    failed with 'Incorrect padding' and the crew could not read its
+    own larger files (tools.py, roles.py, config.py). A 404 is a
+    FileNotFoundError; a directory path is a ValueError.
+    """
     _check_repo(repo)
-    out = _run(
-        ["gh", "api", f"repos/{repo}/contents/{path}?ref={ref}", "--jq", ".content"]
-    )
+    try:
+        out = _run(
+            ["gh", "api", "-H", "Accept: application/vnd.github.raw",
+             f"repos/{repo}/contents/{path}?ref={ref}"],
+            max_output=_READ_MAX_OUTPUT,
+        )
+    except RuntimeError as exc:
+        if "404" in str(exc):
+            raise FileNotFoundError(f"{path!r} not found in {repo}@{ref}") from exc
+        raise
     if not out.strip():
         raise FileNotFoundError(f"{path!r} not found in {repo}@{ref}")
-    try:
-        return base64.b64decode("".join(out.split())).decode("utf-8")
-    except Exception as exc:
-        raise RuntimeError(f"could not decode {path!r} from {repo}: {exc}")
+    if out.lstrip().startswith("["):
+        raise ValueError(f"{path!r} is a directory in {repo}@{ref}, not a file")
+    return out
 
 
 def open_pr(repo: str, title: str, body: str, head: str, base: str = "main") -> str:
