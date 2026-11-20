@@ -158,7 +158,7 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
 
 
 def list_branches(repo: str) -> str:
-    """List branch names in the repo, one per line.
+    """List all branch names in the repo, one per line.
 
     The planner and builder use this to check whether a branch already
     contains a change before creating a fresh one — a duplicate branch
@@ -167,7 +167,11 @@ def list_branches(repo: str) -> str:
     round4-readme-status.
     """
     _check_repo(repo)
-    return _run(["gh", "api", f"repos/{repo}/branches", "--jq", ".[].name"])
+    # A truncated listing can hide an existing branch and duplicate work.
+    return _run(
+        ["gh", "api", f"repos/{repo}/branches", "--paginate", "--jq", ".[].name"],
+        max_output=None,
+    )
 
 
 def list_open_prs(repo: str, head: str = "") -> str:

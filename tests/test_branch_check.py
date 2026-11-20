@@ -79,7 +79,7 @@ def test_list_branches_calls_gh_api(monkeypatch):
     _fake_run(monkeypatch, calls, "main\nround4-merge-signoff\n")
     out = tools_mod.list_branches("warni001/agent-crew")
     assert calls == [
-        ["gh", "api", "repos/warni001/agent-crew/branches", "--jq", ".[].name"]
+        ["gh", "api", "repos/warni001/agent-crew/branches", "--paginate", "--jq", ".[].name"]
     ]
     assert "round4-merge-signoff" in out
 
