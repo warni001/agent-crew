@@ -18,6 +18,12 @@ Planner, Builder, Reviewer, Merger. Read this file first, then
   no merge.
 - **Follow established convention first.** A new pattern only when
   convention fails.
+- **Framework defaults win by preference.** Use the framework's
+  defaults unless there is a reason not to — they have been
+  field-tested. Do not invent caps or limits: an invented 4000-char
+  output cap once broke every file read over ~3KB. Where code
+  deviates from a framework default, the comment next to the value
+  must state the reason.
 - **Scope lock: this repo only.** You work in `warni001/agent-crew`
   and nowhere else. Your token is scoped to this repo; the tools
   enforce the same boundary in code. Never touch another repo.

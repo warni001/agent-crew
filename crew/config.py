@@ -78,10 +78,14 @@ class CrewConfig:
     # on the container app). Empty means the local file — the blob is
     # persistence, not a requirement.
     ledger_blob_url: str = ""
-    # Round cap for one Magentic run. 10 was an arbitrary scaffold
-    # default and too small: the first self-build hit it and terminated
-    # with zero PRs. 30 fits real tasks; the $190 credit guard and the
-    # Saturday deadline still cap total spend.
+    # Round cap for one Magentic run. The framework default is None
+    # (unlimited); we cap deliberately, and the reason is stall
+    # detection plus bounded burn: a stuck task must stop and be
+    # re-queued by a human instead of burning the whole $200 budget.
+    # 10 was an arbitrary scaffold default and too small: the first
+    # self-build hit it and terminated with zero PRs. 30 fits real
+    # tasks; the $190 credit guard and the Saturday deadline still
+    # cap total spend.
     max_rounds: int = 30
 
     @property
