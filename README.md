@@ -237,6 +237,9 @@ names the blocking module.
 
 ## How the crew starts
 
+With the runtime environment above configured, start the crew from the
+repo root with `python -m crew`. Pass a task string to run just that task.
+
 The crew runs as one always-on replica in Container App
 `ca-agent-crew` (see "Compute" above). On start it loads config
 from the environment only, reads its token from Key Vault
