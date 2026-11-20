@@ -27,11 +27,7 @@ from agent_framework import tool
 
 from .config import ALLOWED_REPO
 
-# Default cap for a command's combined output: ~20KB, about 5k tokens.
-# 4000 was far too small — a failing pytest run or a long listing
-# was cut before the useful part, and file reads broke entirely.
-# Commands whose full output is the point (file reads) pass a
-# larger cap explicitly; this default only bounds the rest.
+# Default cap for command diagnostics: ~20KB, about 5k tokens.
 _MAX_OUTPUT = 20_000
 _SHELL_FORBIDDEN = (";", "&&", "||", "|", ">", "<", "`", "$(")
 # Builder needs git, tests, and read-only inspection — nothing else.
@@ -47,13 +43,19 @@ _SHELL_ALLOWED_PREFIXES = (
 )
 
 
-def _run(cmd: list[str], timeout: int = 120, max_output: int | None = _MAX_OUTPUT) -> str:
-    """Run a command (no shell), return stdout, raise on failure.
+def _run(
+    cmd: list[str],
+    timeout: int = 120,
+    max_output: int | None = _MAX_OUTPUT,
+    *,
+    raw_stdout: bool = False,
+) -> str:
+    """Run a command (no shell), raise on failure.
 
     Never pass secrets in `cmd` and never log the environment: `gh`
-    reads GH_TOKEN from the environment itself. Output is truncated
-    to `max_output` chars (default 4000) — pass a larger cap, or
-    None for no cap, when the full output is the point (file reads).
+    reads GH_TOKEN from the environment itself. By default return
+    stripped stdout and stderr, bounded by `max_output`. For file
+    reads, `raw_stdout` returns stdout without stripping or truncating.
     """
     try:
         proc = subprocess.run(
@@ -63,8 +65,8 @@ def _run(cmd: list[str], timeout: int = 120, max_output: int | None = _MAX_OUTPU
         message = f"command timed out after {timeout}s: {cmd[0]}"
         logging.getLogger("crew.tools").warning("command failed: %s", message)
         raise RuntimeError(message) from None
-    out = (proc.stdout + proc.stderr).strip()
     if proc.returncode != 0:
+        out = (proc.stdout + proc.stderr).strip()
         # Log the failure here, with the command and its output: the
         # framework catches this exception and hands the model a
         # generic "Error: Function failed." (unless detailed errors
@@ -77,6 +79,9 @@ def _run(cmd: list[str], timeout: int = 120, max_output: int | None = _MAX_OUTPU
         )
         logging.getLogger("crew.tools").warning("command failed: %s", message)
         raise RuntimeError(message)
+    if raw_stdout:
+        return proc.stdout
+    out = (proc.stdout + proc.stderr).strip()
     return out if max_output is None else out[:max_output]
 
 
@@ -125,11 +130,6 @@ def _inside_repo(path: str) -> Path:
     return target
 
 
-# Cap for a single file read: ~100KB of source. Bounds a pathological
-# read while covering every file in this repo with room to spare.
-_READ_MAX_OUTPUT = 100_000
-
-
 def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
     """Read a file from the repo at a ref, via the gh CLI (raw content).
 
@@ -144,14 +144,12 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
         out = _run(
             ["gh", "api", "-H", "Accept: application/vnd.github.raw",
              f"repos/{repo}/contents/{path}?ref={ref}"],
-            max_output=_READ_MAX_OUTPUT,
+            raw_stdout=True,
         )
     except RuntimeError as exc:
         if "404" in str(exc):
             raise FileNotFoundError(f"{path!r} not found in {repo}@{ref}") from exc
         raise
-    if not out.strip():
-        raise FileNotFoundError(f"{path!r} not found in {repo}@{ref}")
     if out.lstrip().startswith("["):
         raise ValueError(f"{path!r} is a directory in {repo}@{ref}, not a file")
     return out
