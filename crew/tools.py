@@ -177,6 +177,8 @@ def comment_on_pr(repo: str, pr_number: int, body: str) -> str:
 def merge_pr(repo: str, pr_number: int) -> str:
     """Merge a pull request (gh default merge). Only after reviewer sign-off."""
     _check_repo(repo)
+    if (reason := _review_blocker(pr_number)) is not None:
+        raise RuntimeError(f"refusing to merge PR #{pr_number}: {reason}")
     return _run(["gh", "pr", "merge", str(pr_number), "--repo", repo])
 
 
@@ -196,19 +198,30 @@ def record_sign_off(pr_number: int, verdict: str, notes: str = "") -> str:
     return f"recorded {verdict} for PR #{pr_number} at {entry['ts']}"
 
 
-def check_review_sign_off(pr_number: int) -> str:
-    """Report whether an 'approved' reviewer sign-off is recorded for a PR."""
+def _review_blocker(pr_number: int) -> str | None:
+    """Return why the latest sign-off does not permit a merge, if blocked."""
     from .ledger import Ledger
 
-    sign_offs = Ledger(
-        os.environ.get("CREW_LEDGER_PATH", "crew-ledger.jsonl")
-    ).sign_offs(pr_number)
-    approved = [s for s in sign_offs if s.get("verdict") == "approved"]
-    if approved:
-        return f"YES: PR #{pr_number} has an approved reviewer sign-off."
-    if sign_offs:
-        return f"NO: PR #{pr_number} has sign-offs but none approved: {sign_offs}"
-    return f"NO: no reviewer sign-off recorded for PR #{pr_number}."
+    if type(pr_number) is not int or pr_number <= 0:
+        return "expected a positive integer PR number"
+    try:
+        sign_offs = Ledger(
+            os.environ.get("CREW_LEDGER_PATH", "crew-ledger.jsonl")
+        ).sign_offs(pr_number)
+    except (OSError, ValueError, AttributeError):
+        return "reviewer sign-off ledger is unreadable"
+    if not sign_offs:
+        return "no reviewer sign-off recorded"
+    if sign_offs[-1].get("verdict") != "approved":
+        return "latest reviewer sign-off is not approved"
+    return None
+
+
+def check_review_sign_off(pr_number: int) -> str:
+    """Report whether the latest reviewer sign-off permits a merge."""
+    if (reason := _review_blocker(pr_number)) is not None:
+        return f"NO: PR #{pr_number}: {reason}."
+    return f"YES: PR #{pr_number} has an approved latest reviewer sign-off."
 
 
 def read_file(path: str) -> str:
