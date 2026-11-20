@@ -38,12 +38,18 @@ def _fake_run(monkeypatch, stdout, returncode=0, stderr=""):
 
 
 def test_read_repo_file_returns_large_file_whole(tools_mod, monkeypatch):
-    big = "x" * 50_000
-    calls = _fake_run(monkeypatch, big)
+    big = "    indented first line\n" + "x" * 110_000 + "\n\n"
+    calls = _fake_run(monkeypatch, big, stderr="gh: warning\n")
     assert tools_mod.read_repo_file("warni001/agent-crew", "crew/tools.py") == big
     cmd = calls[0]
     assert any("application/vnd.github.raw" in part for part in cmd)
     assert "--jq" not in cmd and ".content" not in cmd
+
+
+@pytest.mark.parametrize("stdout", ["", "  \n\n"])
+def test_read_repo_file_returns_blank_files(tools_mod, monkeypatch, stdout):
+    _fake_run(monkeypatch, stdout)
+    assert tools_mod.read_repo_file("warni001/agent-crew", "blank.txt") == stdout
 
 
 def test_read_repo_file_missing_is_file_not_found(tools_mod, monkeypatch):
