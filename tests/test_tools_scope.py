@@ -36,6 +36,17 @@ def test_allowed_repos_is_agent_crew_only(tools_mod):
     assert tools_mod.ALLOWED_REPOS == frozenset({"warni001/agent-crew"})
 
 
+def test_no_agent_toolset_has_check_credit(tools_mod):
+    """Credit is enforced in code by the loop, never by the agents:
+    the check_credit tool looped forever (each check re-sent full
+    history as prompt tokens) and repeated checks preceded a 400
+    about a missing tool call. No role may receive it again."""
+    for name in ("READ_TOOLS", "BUILD_TOOLS", "REVIEW_TOOLS", "MERGE_TOOLS", "ALL_TOOLS"):
+        tools = getattr(tools_mod, name)
+        assert "check_credit" not in [t.name for t in tools], name
+    assert not hasattr(tools_mod, "check_credit")
+
+
 def test_ghcr_image_constant(tools_mod):
     assert tools_mod.GHCR_IMAGE == "ghcr.io/warni001/agent-crew:latest"
 

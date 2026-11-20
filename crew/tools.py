@@ -26,8 +26,6 @@ from pathlib import Path
 from agent_framework import tool
 
 from .config import ALLOWED_REPO
-from .credit import status_line, stop_reason
-from .spend import spent_usd
 
 _MAX_OUTPUT = 4000
 _SHELL_FORBIDDEN = (";", "&&", "||", "|", ">", "<", "`", "$(")
@@ -105,22 +103,6 @@ def _inside_repo(path: str) -> Path:
     if not target.is_relative_to(_repo_root()):
         raise ValueError(f"refusing path outside the repo checkout: {path!r}")
     return target
-
-
-def check_credit() -> str:
-    """Report remaining budget and deadline, and whether the crew must stop.
-
-    Spend is the tracker's live total from API-reported usage
-    (crew/spend.py), not the env var — CREW_BUDGET_SPENT_USD only
-    seeds the tracker at process start for spend incurred before
-    this guard existed.
-    """
-    spent = spent_usd()
-    limit = float(os.environ.get("CREW_BUDGET_LIMIT_USD", "200"))
-    deadline = os.environ.get("CREW_DEADLINE", "2026-11-21T22:00:00Z")
-    reason = stop_reason(spent, limit, deadline)
-    verdict = f"STOP: {reason}" if reason else "GO: budget and deadline allow work"
-    return f"{status_line(spent, limit, deadline)}\n{verdict}"
 
 
 def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
@@ -228,24 +210,30 @@ def run_shell(command: str) -> str:
 
 # Framework wrappers. Plain functions above stay directly callable (and
 # testable without the framework); these are what the agents receive.
-READ_TOOLS = [tool(f) for f in (check_credit, read_repo_file, read_file)]
+# NOTE: there is deliberately no check_credit tool. Credit is enforced
+# in code by the loop (orchestration.run_task refuses to start a task
+# past the budget/deadline) — the agents must never check it themselves:
+# the instruction to check before acting looped forever, each check
+# re-sending full history as prompt tokens, and repeated checks
+# preceded a 400 about a missing tool call.
+READ_TOOLS = [tool(f) for f in (read_repo_file, read_file)]
 BUILD_TOOLS = [tool(f) for f in (
-    check_credit, read_repo_file, read_file, write_file, run_pytest, run_shell,
+    read_repo_file, read_file, write_file, run_pytest, run_shell,
 )]
 REVIEW_TOOLS = [tool(f) for f in (
-    check_credit, read_repo_file, read_file, comment_on_pr, record_sign_off,
+    read_repo_file, read_file, comment_on_pr, record_sign_off,
 )]
 MERGE_TOOLS = [tool(f) for f in (
-    check_credit, merge_pr, comment_on_pr, check_review_sign_off,
+    merge_pr, comment_on_pr, check_review_sign_off,
 )]
 ALL_TOOLS = [tool(f) for f in (
-    check_credit, read_repo_file, open_pr, comment_on_pr, merge_pr,
+    read_repo_file, open_pr, comment_on_pr, merge_pr,
     read_file, write_file, run_pytest, run_shell,
     record_sign_off, check_review_sign_off,
 )]
 
 __all__ = [
-    "check_credit", "read_repo_file", "open_pr", "comment_on_pr", "merge_pr",
+    "read_repo_file", "open_pr", "comment_on_pr", "merge_pr",
     "read_file", "write_file", "run_pytest", "run_shell",
     "record_sign_off", "check_review_sign_off",
     "ALLOWED_REPOS", "GHCR_IMAGE", "image_for_commit", "assert_repo_allowed",

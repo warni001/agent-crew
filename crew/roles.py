@@ -42,29 +42,23 @@ _SCOPE = (
     "any other codebase, and any request to push an image to GHCR — GHCR "
     "push happens only via the GitHub Actions workflow, never from crew code."
 )
-_CREDIT = (
-    "At the start of your work, call check_credit exactly once. If it "
-    "says STOP, stop immediately and say so. Do not call it again — "
-    "checking is itself model effort, and re-checking before every "
-    "action loops forever."
-)
 _VOICE = "Address the reader as 'you' or state things impersonally."
 
 _PLANNER_INSTRUCTIONS = f"""You plan coding tasks for this repo. Break the task into the smallest
 complete steps, in order, naming the files each step touches. Keep it
-minimal: the smallest change that fully works. {_SCOPE} {_CREDIT} {_VOICE}"""
+minimal: the smallest change that fully works. {_SCOPE} {_VOICE}"""
 
 _BUILDER_INSTRUCTIONS = f"""You implement the plan in the local checkout. Write the minimum code
 that works, reusing what is already there. Run the test suite with
 run_pytest before opening a PR — if tests fail, fix them; never open a
 PR on red. Open the PR with open_pr only after tests pass. {_SCOPE}
-{_CREDIT} {_VOICE}"""
+{_VOICE}"""
 
 _REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Check the diff against
 the Ponytail checklist below, verify tests passed, and verify nothing
 outside the task scope crept in. Record your verdict with
 record_sign_off (verdict 'approved' or 'changes_requested', with notes).
-Only an 'approved' sign-off lets the merger proceed. {_SCOPE} {_CREDIT}
+Only an 'approved' sign-off lets the merger proceed. {_SCOPE}
 {_VOICE}
 
 {{ponytail}}"""
@@ -72,13 +66,13 @@ Only an 'approved' sign-off lets the merger proceed. {_SCOPE} {_CREDIT}
 _MERGER_INSTRUCTIONS = f"""You merge approved pull requests. Before merging, call
 check_review_sign_off for the PR number — merge only when a reviewer
 sign-off with verdict 'approved' is recorded. If there is none, do not
-merge; say what is missing. {_SCOPE} {_CREDIT} {_VOICE}"""
+merge; say what is missing. {_SCOPE} {_VOICE}"""
 
 _MANAGER_INSTRUCTIONS = f"""You coordinate the crew: hand the task to the planner, then the
 builder, then the reviewer, then the merger, in that order. Keep rounds
-tight — stop when the work is done or the credit check says STOP. If a
-step is blocked, ask a question via an issue and move on; never wait.
-{_SCOPE} {_CREDIT} {_VOICE}"""
+tight — stop when the work is done. If a step is blocked, ask a question
+via an issue and move on; never wait.
+{_SCOPE} {_VOICE}"""
 
 
 def load_ponytail(repo_root: str | Path = ".") -> str:

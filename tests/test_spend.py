@@ -183,19 +183,6 @@ def test_module_helpers_round_trip(spend_mod):
 
 # --- wiring: tools and orchestration read the tracker -----------------
 
-def test_check_credit_reports_tracked_spend(spend_mod):
-    tools_mod = require_crew("tools")
-    spend_mod.record_usage("gpt-6-2-astra", ASTRA_IN)  # $8.00
-    out = tools_mod.check_credit()
-    assert "$8.00 spent" in out
-    assert "GO: budget and deadline allow work" in out
-    spend_mod.record_usage("gpt-6-2-astra", {"output_token_count": 4_550_000})  # +$182
-    out = tools_mod.check_credit()
-    assert "$190.00 spent" in out
-    assert out.startswith("Budget: $190.00")
-    assert "STOP:" in out
-
-
 def test_run_task_refuses_when_tracked_spend_over_line(spend_mod):
     import asyncio
     from unittest import mock
