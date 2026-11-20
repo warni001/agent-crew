@@ -109,7 +109,7 @@ resource tokenAlerts 'Microsoft.Insights/metricAlerts@2018-03-01' = [
       scopes: [
         gptAccount.id
       ]
-      evaluationFrequency: 'PT1M'
+      evaluationFrequency: 'PT5M' // Azure requires >= 5 min when the window is over 4h (P1D here)
       windowSize: 'P1D'
       criteria: {
         'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
