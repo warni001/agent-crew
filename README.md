@@ -7,8 +7,10 @@ Sat Nov 21, ~6:30pm ET. No human review in the loop: agent review,
 tests, and CI are the gates. The crew's first task is to build v1 of
 itself in this repo.
 
-**Status: scaffold.** This repo currently holds infrastructure only.
-The crew code does not exist yet — building it is project #1.
+**Status: v1 source is in this repo.** See [`crew/`](crew/) for the
+Planner → Builder → Reviewer → Merger workflow and GitHub issue loop,
+[`tests/`](tests/) for offline checks, and
+[`docs/crew-instructions.md`](docs/crew-instructions.md) for operating instructions.
 
 Docs and code in this repo address you as "you" — never in the third
 person.
@@ -219,10 +221,19 @@ and nothing here has touched Azure yet):
 
 ## How to run locally
 
+Set up Python 3.14 and install the same dependencies as CI. This step
+may need network access to download packages.
+
 ```bash
 python3.14 -m venv .venv
-.venv/bin/pip install pytest
-.venv/bin/python -m pytest tests/ -v
+.venv/bin/pip install -r requirements.txt pytest==9.2.0
+```
+
+Run the tests offline from the repo root. You do not need Azure or GitHub
+credentials.
+
+```bash
+.venv/bin/python -m pytest
 ```
 
 Tests run offline: the chat clients and the `gh` CLI are mocked
@@ -231,9 +242,7 @@ live Azure calls. The full crew needs `KEY_VAULT_URL`,
 `FOUNDRY_PROJECT_ENDPOINT` (the Foundry project endpoint, from which
 the classic Azure OpenAI chat endpoint is derived — or set
 `AZURE_OPENAI_ENDPOINT` directly), and `GITHUB_TOKEN` from the environment;
-the tests do not. The crew package (`crew/`) is built by a parallel
-track — tests that need it skip until it merges, and the skip list
-names the blocking module.
+the tests do not.
 
 ## How the crew starts
 
