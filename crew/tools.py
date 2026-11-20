@@ -175,9 +175,14 @@ def comment_on_pr(repo: str, pr_number: int, body: str) -> str:
 
 
 def merge_pr(repo: str, pr_number: int) -> str:
-    """Merge a pull request (gh default merge). Only after reviewer sign-off."""
+    """Merge a pull request (gh default merge). Only after reviewer sign-off.
+
+    gh requires an explicit strategy in non-interactive mode, so --merge
+    is passed (the merge commit, gh's default); without it the command
+    fails and an approved PR never merges.
+    """
     _check_repo(repo)
-    return _run(["gh", "pr", "merge", str(pr_number), "--repo", repo])
+    return _run(["gh", "pr", "merge", str(pr_number), "--merge", "--repo", repo])
 
 
 def record_sign_off(pr_number: int, verdict: str, notes: str = "") -> str:
