@@ -39,21 +39,23 @@ jobs:
           # The Actions cache keeps unchanged layers between runs.
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Immutable tag per commit, plus latest for convenience. Deploys
-          # must use the sha tag: updating with an unchanged `:latest`
-          # string creates no new Container Apps revision, and a `:latest`
-          # pull can resolve to a stale cached manifest. A sha tag can
-          # only ever point at one digest, so both problems go away.
+          # Immutable tag per commit, and nothing else: `:latest` is
+          # not pushed at all. Deploys must use the sha tag — updating
+          # with an unchanged `:latest` string creates no new
+          # Container Apps revision, and a `:latest` pull can resolve
+          # to a stale cached manifest. A sha tag can only ever point
+          # at one digest, so both problems go away. The smoke test
+          # below pins the same sha tag for the same reason: testing
+          # `:latest` could test a stale image.
           tags: |
-            ghcr.io/warni001/agent-crew:latest
             ghcr.io/warni001/agent-crew:sha-${{ github.sha }}
 
       # A missing tool used to ship silently (gh, git, pytest were all
       # absent from the image) and only fail in Azure. Fail here instead.
       - name: Smoke test the image
         run: |
-          docker run --rm ghcr.io/warni001/agent-crew:latest which gh git pytest
-          docker run --rm ghcr.io/warni001/agent-crew:latest python -m crew --help
+          docker run --rm ghcr.io/warni001/agent-crew:sha-${{ github.sha }} which gh git pytest
+          docker run --rm ghcr.io/warni001/agent-crew:sha-${{ github.sha }} python -m crew --help
 
   # Auto-deploy: a push to main deploys itself, so nobody has to run
   # `az containerapp update` by hand — the running crew would otherwise

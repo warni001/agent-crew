@@ -29,4 +29,9 @@ jobs:
         run: python -c "import importlib.metadata; v = importlib.metadata.version('agent-framework'); assert v not in ('1.26.1', '1.26.2'), f'hijacked agent-framework {v} installed'; print(f'agent-framework {v} ok')"
 
       - name: Run tests
-        run: pytest
+        # Bare `pytest` does not put the repo root on sys.path, so a
+        # test module that imports `crew` at the top level fails
+        # collection in CI (ModuleNotFoundError) while passing locally
+        # under `python -m pytest`. The `python -m` form puts the cwd
+        # on sys.path; run the suite that way.
+        run: python -m pytest

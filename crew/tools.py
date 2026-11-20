@@ -70,7 +70,10 @@ def _run(cmd: list[str], timeout: int = 120, max_output: int | None = _MAX_OUTPU
 
 
 ALLOWED_REPOS = frozenset({ALLOWED_REPO})
-GHCR_IMAGE = "ghcr.io/warni001/agent-crew:latest"
+# The image repository, with no tag: tags are always built per commit
+# by image_for_commit below. `:latest` is never used — not for deploys
+# and not for verification (a `:latest` pull can resolve stale).
+GHCR_IMAGE = "ghcr.io/warni001/agent-crew"
 
 
 def image_for_commit(sha: str) -> str:
@@ -85,7 +88,7 @@ def image_for_commit(sha: str) -> str:
     sha = sha.strip()
     if not sha:
         raise ValueError("commit sha must not be empty")
-    return f"ghcr.io/warni001/agent-crew:sha-{sha}"
+    return f"{GHCR_IMAGE}:sha-{sha}"
 
 
 def _check_repo(repo: str) -> None:

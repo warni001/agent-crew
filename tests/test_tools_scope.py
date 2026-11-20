@@ -3,7 +3,7 @@
 Contract under test (see docs/crew-instructions.md, "Module contract")::
 
     crew.tools.ALLOWED_REPOS == frozenset({"warni001/agent-crew"})
-    crew.tools.GHCR_IMAGE == "ghcr.io/warni001/agent-crew:latest"
+    crew.tools.GHCR_IMAGE == "ghcr.io/warni001/agent-crew"
     crew.tools.assert_repo_allowed(repo)  # raises ValueError otherwise
 
 The crew PAT is scoped to ``agent-crew`` only, and the tools must
@@ -48,7 +48,7 @@ def test_no_agent_toolset_has_check_credit(tools_mod):
 
 
 def test_ghcr_image_constant(tools_mod):
-    assert tools_mod.GHCR_IMAGE == "ghcr.io/warni001/agent-crew:latest"
+    assert tools_mod.GHCR_IMAGE == "ghcr.io/warni001/agent-crew"
 
 
 def test_image_for_commit_is_sha_tagged(tools_mod):

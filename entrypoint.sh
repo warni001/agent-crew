@@ -8,12 +8,20 @@
 # gh is actually authed; otherwise the crew still runs and a push fails
 # with a clear error. Git identity is the repo rule: commits in
 # agent-crew go as warni001.
+#
+# The setup only runs for the crew itself (`python -m crew ...`). Any
+# other command passes through untouched — the CI smoke test runs
+# `which gh git pytest` in the image, and an entrypoint that always
+# execs the crew would feed those words to the crew's arg parser
+# instead. Never `exec python -m crew "$@"` unconditionally.
 set -e
 
-if gh auth status >/dev/null 2>&1; then
-    gh auth setup-git
+if [ "$1" = "python" ] && [ "$2" = "-m" ] && [ "$3" = "crew" ]; then
+    if gh auth status >/dev/null 2>&1; then
+        gh auth setup-git
+    fi
+    git config --global user.name "John Warnicke"
+    git config --global user.email "john.warnicke@gmail.com"
 fi
-git config --global user.name "John Warnicke"
-git config --global user.email "john.warnicke@gmail.com"
 
-exec python -m crew "$@"
+exec "$@"

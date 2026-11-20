@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 
-GHCR_IMAGE = "ghcr.io/warni001/agent-crew:latest"
+GHCR_IMAGE = "ghcr.io/warni001/agent-crew"
 UPDATE_CMD = (
     "az containerapp update -g rg-agent-crew -n ca-agent-crew "
     "--image ghcr.io/warni001/agent-crew:sha-<commit-sha> "
