@@ -27,6 +27,8 @@ infra/
 scripts/
   crew-diag.sh          container revisions, logs, PRs, issues, token usage
   crew-spend.sh         live spend from the blob ledger (guard: $190)
+  rollback_watch.py     post-deploy health watch: rolls the new revision
+                        back to the last good one on crash-loop or silence
   v1-probe.py           frozen Nov 19 probe that proved api-version=preview
                         on the /openai/v1 path — Magentic-era, not runnable
 ```

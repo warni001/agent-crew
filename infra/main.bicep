@@ -82,6 +82,9 @@ param claudeIndustry string = 'technology'
 @description('Email address for the 50% and 90% budget alerts. Override at deploy time; the 95% alert also fires the Action Group.')
 param budgetNotifyEmail string = 'john.warnicke@gmail.com'
 
+@description('Object ID of the deploy service principal (github-agent-crew-deploy). When set, it gets Storage Blob Data Reader on the ledger storage account, so the deploy workflow can read the run ledger for the post-deploy health watch (scripts/rollback_watch.py). Empty means no assignment is created — grant the role once with az role assignment create instead.')
+param deployServicePrincipalId string = ''
+
 @description('Monthly budget amount in USD for the crew resource group. The kill switch fires at 95% of this amount.')
 param budgetAmount int = 200
 
@@ -113,6 +116,7 @@ var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908'
 var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+var storageBlobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 
 // Key Vault: RBAC authorization, purge protection on. No secrets are
 // created by this template; deploy.sh stores the GitHub token after
@@ -458,6 +462,20 @@ resource crewLedgerAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
     principalId: crewApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// The deploy workflow's post-deploy health watch reads the same ledger
+// (scripts/rollback_watch.py). The deploy service principal is created
+// by deploy.sh, outside this template, so its object ID arrives as a
+// parameter; empty means no assignment is created here.
+resource deployLedgerReadAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(deployServicePrincipalId)) {
+  name: guid(ledgerStorage.id, deployServicePrincipalId, storageBlobDataReaderRoleId)
+  scope: ledgerStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
+    principalId: deployServicePrincipalId
     principalType: 'ServicePrincipal'
   }
 }
