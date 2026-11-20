@@ -27,6 +27,7 @@ from agent_framework.orchestrations import MagenticBuilder
 from .config import CrewConfig
 from .credit import should_stop, stop_reason
 from .roles import build_roles
+from .spend import spent_usd
 
 
 def build_workflow(config: CrewConfig) -> Workflow:
@@ -46,12 +47,17 @@ def build_workflow(config: CrewConfig) -> Workflow:
 
 async def run_task(workflow: Workflow, task: str, config: CrewConfig) -> list[Any]:
     """Run one task through the crew. Credit/deadline stop is checked
-    before any model call; the workflow itself re-checks via its tools."""
-    if should_stop(config.budget_spent_usd, config.budget_limit_usd,
-                    config.deadline_iso):
+    before any model call; the workflow itself re-checks via its tools.
+
+    The spend figure is the tracker's live total (crew/spend.py), not
+    the config's starting offset — the offset only seeds the tracker
+    at process start.
+    """
+    spent = spent_usd()
+    if should_stop(spent, config.budget_limit_usd, config.deadline_iso):
         raise RuntimeError(
             "crew stopped before starting: "
-            f"{stop_reason(config.budget_spent_usd, config.budget_limit_usd, config.deadline_iso)}"
+            f"{stop_reason(spent, config.budget_limit_usd, config.deadline_iso)}"
         )
     result = await workflow.run(task)
     return result.get_outputs()

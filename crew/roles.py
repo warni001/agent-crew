@@ -99,7 +99,10 @@ def make_chat_client(config: CrewConfig, model: str) -> OpenAIChatClient:
     managed identity at runtime). No key or token is handled here.
     The endpoint is config.resolve_azure_openai_endpoint() — the
     explicit AZURE_OPENAI_ENDPOINT, else derived from the Foundry
-    project/account endpoint bicep already sets.
+    project/account endpoint bicep already sets. The client built is
+    a CountingChatClient: every call is priced from API-reported
+    usage into the process spend tracker (crew/spend.py), and at
+    $190 it refuses further calls.
     """
     return build_chat_client(config.resolve_azure_openai_endpoint(), model)
 

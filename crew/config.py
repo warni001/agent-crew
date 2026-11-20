@@ -67,6 +67,9 @@ class CrewConfig:
     merger_model: str = "gpt-6-2-sol"
     manager_model: str = "gpt-6-2-astra"
     budget_limit_usd: float = 200.0
+    # Manual starting offset: spend incurred before the tracker existed.
+    # It only seeds the tracker at process start (crew/spend.py); the
+    # live total is what the tracker counts from API-reported usage.
     budget_spent_usd: float = 0.0
     # Hard deadline: Sat Nov 21 5pm ET == 22:00 UTC.
     deadline_iso: str = "2026-11-21T22:00:00Z"

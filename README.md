@@ -65,7 +65,13 @@ Four things need you before (or right after) the deploy:
    principal `github-agent-crew-deploy` (Contributor on the crew
    resource group; its credential is reset on every re-run and set as
    `AZURE_DEPLOY_CREDENTIALS` in this repo), then the Bicep deploy.
-   Re-running is safe — the deployment is incremental.
+   Re-running is safe for a fresh setup — the deployment is
+   incremental. **It is not safe against a live crew:** `main.bicep`
+   declares the container app with the placeholder image, so a
+   re-run resets the live app's image back to helloworld and mints a
+   new revision, killing the running crew until the next push. To add
+   infrastructure to a live crew, deploy a standalone template
+   instead — see the metric alerts below.
 
 ## Kill switch (the spend cutoff)
 
@@ -88,6 +94,47 @@ So the cutoff is wired, not assumed:
   hardcodes the crew resource group name in the DELETE URI. See
   `infra/killswitch-role.bicep` for the full trade-off.
 - **Manual kill, any time:** `az group delete --name rg-agent-crew --yes --no-wait`
+
+## Real-time cost guard
+
+The budget above is a backstop, not a real-time cutoff — Cost
+Management data lands 8–24h late. Two faster layers sit in front
+of it:
+
+- **Metric alerts on token usage (primary).** `infra/alerts.bicep`
+  deploys four metric alert rules on the Foundry account — input and
+  output tokens per deployment (`gpt-6-2-astra`, `gpt-6-2-sol`) —
+  each set at $40 of tokens in a rolling 24h window, firing the same
+  Action Group → the same Logic App. Worst case at first fire: just
+  under 4 × $40 ≈ $160 plus a few minutes of alert latency, under
+  the $190 stop. Evaluation runs every minute; metric data lands in
+  minutes, not hours. Deploy it standalone (it touches only alert
+  rules, never the container app):
+  ```
+  az deployment group create -g rg-agent-crew \
+    --template-file infra/alerts.bicep
+  ```
+  Or one alert rule by hand:
+  ```
+  az monitor metrics alert create -g rg-agent-crew \
+    -n astra-input-40usd --scopes <foundry-account-id> \
+    --condition "total ProcessedPromptTokens > 5000000 where ModelDeploymentName includes gpt-6-2-astra" \
+    --window-size 1d --evaluation-frequency 1m --severity 0 \
+    --action <action-group-id>
+  ```
+  Honest limit: a 24h window cannot see spend spread over several
+  days — a slow drip is still caught by the budget, the deadline,
+  and the in-code tracker below.
+- **Token counting in the crew (second layer).** Every model call
+  goes through `CountingChatClient` (`crew/clients.py`), which
+  prices the call from the usage the API reports on the response —
+  input, cached-input, and output tokens per model — and accumulates
+  it in `crew/spend.py`. The running total persists as `spend`
+  events in the run ledger, so a restart picks up where the last run
+  left off. When the total reaches $190 the client refuses the next
+  call before it is made, and the loop stops itself. One call can
+  still cross the line (the check runs before the call, not after),
+  so the overshoot past $190 is bounded by a single call's cost.
 
 Honest limit: Cost Management evaluates budgets roughly every 24
 hours on cost data that lands 8–24 hours late, so the 95% trigger is

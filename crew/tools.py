@@ -27,6 +27,7 @@ from agent_framework import tool
 
 from .config import ALLOWED_REPO
 from .credit import status_line, stop_reason
+from .spend import spent_usd
 
 _MAX_OUTPUT = 4000
 _SHELL_FORBIDDEN = (";", "&&", "||", "|", ">", "<", "`", "$(")
@@ -107,8 +108,14 @@ def _inside_repo(path: str) -> Path:
 
 
 def check_credit() -> str:
-    """Report remaining budget and deadline, and whether the crew must stop."""
-    spent = float(os.environ.get("CREW_BUDGET_SPENT_USD", "0"))
+    """Report remaining budget and deadline, and whether the crew must stop.
+
+    Spend is the tracker's live total from API-reported usage
+    (crew/spend.py), not the env var — CREW_BUDGET_SPENT_USD only
+    seeds the tracker at process start for spend incurred before
+    this guard existed.
+    """
+    spent = spent_usd()
     limit = float(os.environ.get("CREW_BUDGET_LIMIT_USD", "200"))
     deadline = os.environ.get("CREW_DEADLINE", "2026-11-21T22:00:00Z")
     reason = stop_reason(spent, limit, deadline)
