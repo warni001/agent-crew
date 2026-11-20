@@ -72,7 +72,11 @@ def list_task_issues(repo: str) -> list[dict]:
     rows = _gh_json(
         repo,
         ["issue", "list", "--label", TASK_LABEL, "--state", "open",
-         "--limit", "20", "--json", "number,title,body"],
+         # 100, not 20: the list is newest-first and reversed to
+         # oldest-first, so a 20-cap would hide the oldest tasks
+         # once the queue passed 20 — exactly the tasks the loop
+         # should run first.
+         "--limit", "100", "--json", "number,title,body"],
     )
     out = [
         {
