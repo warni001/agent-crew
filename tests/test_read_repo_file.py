@@ -1,15 +1,9 @@
-"""read_repo_file must return whole files, and fail cleanly otherwise.
-
-Regression (Nov 19, 2026): `_run` capped all output at 4000 chars,
-and the old base64 path decoded `.content` — so any file over ~3KB
-came back cut mid-string and b64decode failed with 'Incorrect
-padding'. The crew could read small files (credit.py) but not its
-own larger ones (tools.py, roles.py, config.py), and every one of
-those reads surfaced as a bare RuntimeError.
-"""
+"""Remote reads return whole files unchanged or fail explicitly."""
 
 from __future__ import annotations
 
+import base64
+import json
 from unittest import mock
 
 import pytest
@@ -23,27 +17,25 @@ def tools_mod():
 
 
 def _fake_run(monkeypatch, stdout, returncode=0, stderr=""):
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, *args, **kwargs):
-        calls.append(list(cmd))
-        result = mock.Mock()
-        result.returncode = returncode
-        result.stdout = stdout
-        result.stderr = stderr
-        return result
-
-    monkeypatch.setattr("subprocess.run", fake_run)
-    return calls
+    runner = mock.Mock(return_value=mock.Mock(
+        returncode=returncode, stdout=stdout, stderr=stderr,
+    ))
+    monkeypatch.setattr("subprocess.run", runner)
+    return runner
 
 
-def test_read_repo_file_returns_large_file_whole(tools_mod, monkeypatch):
-    big = "x" * 50_000
-    calls = _fake_run(monkeypatch, big)
-    assert tools_mod.read_repo_file("warni001/agent-crew", "crew/tools.py") == big
-    cmd = calls[0]
-    assert any("application/vnd.github.raw" in part for part in cmd)
-    assert "--jq" not in cmd and ".content" not in cmd
+def _file(contents: str) -> str:
+    data = contents.encode("utf-8")
+    return json.dumps({
+        "type": "file", "size": len(data), "encoding": "base64",
+        "content": base64.encodebytes(data).decode("ascii"),
+    })
+
+
+@pytest.mark.parametrize("contents", ["", "[section]\n", "  café\r\n\n", "x" * 100_000])
+def test_read_repo_file_returns_exact_contents(tools_mod, monkeypatch, contents):
+    _fake_run(monkeypatch, _file(contents), stderr="diagnostic\n")
+    assert tools_mod.read_repo_file("warni001/agent-crew", "example") == contents
 
 
 def test_read_repo_file_missing_is_file_not_found(tools_mod, monkeypatch):
@@ -53,6 +45,20 @@ def test_read_repo_file_missing_is_file_not_found(tools_mod, monkeypatch):
 
 
 def test_read_repo_file_directory_is_value_error(tools_mod, monkeypatch):
-    _fake_run(monkeypatch, '[{"name": "__init__.py"}]')
+    _fake_run(monkeypatch, '[{"name": "__init__.py", "type": "file"}]')
     with pytest.raises(ValueError, match="is a directory"):
         tools_mod.read_repo_file("warni001/agent-crew", "crew")
+
+
+def test_read_repo_file_rejects_oversized_content(tools_mod, monkeypatch):
+    _fake_run(monkeypatch, _file("x" * 100_001))
+    with pytest.raises(ValueError, match="exceeds the 100000-byte read limit"):
+        tools_mod.read_repo_file("warni001/agent-crew", "example")
+
+
+def test_read_repo_file_encodes_path_and_ref(tools_mod, monkeypatch):
+    runner = _fake_run(monkeypatch, _file(""))
+    tools_mod.read_repo_file("warni001/agent-crew", "dir/a?#.txt", "branch&ref=main")
+    assert runner.call_args.args[0][-1] == (
+        "repos/warni001/agent-crew/contents/dir/a%3F%23.txt?ref=branch%26ref%3Dmain"
+    )
