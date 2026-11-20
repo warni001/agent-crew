@@ -26,6 +26,7 @@ import time
 from .config import CrewConfig
 from .credit import stop_reason
 from .feedback import (
+    close_task_issue,
     comment_on_task_issue,
     list_done_tasks,
     list_task_issues,
@@ -166,37 +167,31 @@ def _record_spend(ledger: Ledger) -> None:
     )
 
 
-def _mark_task_stalled(
-    config: CrewConfig, issue_number: int | None, reason: str, summary: str
+def _settle_task_issue(
+    config: CrewConfig, issue_number: int | None, body: str, *, stalled: bool = False
 ) -> None:
-    """Comment on the original task issue and tag it stalled.
-
-    The separate "[crew] Stalled:" issue is already posted; this puts
-    the status on the original issue itself, so the stall is visible
-    where the task lives. Best-effort: neither call may fail the run —
-    a comment failure warns and the tag is still attempted, and a tag
-    failure warns too. Nothing happens when there is no issue number
-    (the default task, or a one-shot run).
-    """
+    """Comment, optionally tag, and close the original issue independently."""
     if issue_number is None:
         return
     log = logging.getLogger("crew")
-    body = f"Stalled: {reason}\n\n{summary}"
     try:
         comment_on_task_issue(config.repo, issue_number, body)
-        log.info("stalled comment posted on issue #%s", issue_number)
+        log.info("outcome comment posted on issue #%s", issue_number)
     except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
         print(
             f"warning: could not comment on task issue #{issue_number}: {exc}",
             file=sys.stderr,
         )
+    if stalled:
+        try:
+            tag_task_stalled(config.repo, issue_number)
+        except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+            log.warning("could not tag task issue #%s: %s", issue_number, exc)
     try:
-        tag_task_stalled(config.repo, issue_number)
-    except Exception as exc:  # noqa: BLE001 - tag_task_stalled never raises
-        print(
-            f"warning: could not tag task issue #{issue_number}: {exc}",
-            file=sys.stderr,
-        )
+        close_task_issue(config.repo, issue_number)
+        log.info("closed task issue #%s", issue_number)
+    except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+        log.warning("could not close task issue #%s: %s", issue_number, exc)
 
 
 def run_one_task(
@@ -210,9 +205,8 @@ def run_one_task(
     the reviewer never ran, so nothing shipped). A run that records
     task_finished with zero PRs is the Nov 19 hollow-done mistake;
     the gate exists to stop it repeating. An approved sign-off is
-    what lets a run finish. `issue_number` is the original task
-    issue, when the task came from one: a stalled run comments on it
-    and tags it stalled, in addition to posting the stalled issue.
+    what lets a run finish. When `issue_number` is supplied, post the
+    outcome there and close the issue; stalled runs also tag it.
     """
     log = logging.getLogger("crew")
     _record(ledger, "task_started", task=task, repo=config.repo)
@@ -227,6 +221,7 @@ def run_one_task(
     except Exception as exc:  # noqa: BLE001 - report the failure, then exit 1
         _record(ledger, "task_failed", task=task, error=str(exc))
         log.error("task failed: %s", exc)
+        _settle_task_issue(config, issue_number, "Failed: the workflow raised an exception.")
         return 1
 
     # One summary for every settlement path: the header (agents ran,
@@ -248,7 +243,9 @@ def run_one_task(
                 log.info("stalled issue posted: %s", url)
             except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
                 print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
-            _mark_task_stalled(config, issue_number, "review", summary)
+            _settle_task_issue(
+                config, issue_number, f"Stalled: review\n\n{summary}", stalled=True
+            )
             return 1
         if not sign_offs:
             _record(ledger, "task_stalled", task=task, reason="no_review")
@@ -258,7 +255,9 @@ def run_one_task(
                 log.info("stalled issue posted: %s", url)
             except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
                 print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
-            _mark_task_stalled(config, issue_number, "no_review", summary)
+            _settle_task_issue(
+                config, issue_number, f"Stalled: no_review\n\n{summary}", stalled=True
+            )
             return 1
     _record(ledger, "task_finished", task=task, outputs=outputs)
     log.info("task finished:\n%s", summary)
@@ -267,6 +266,7 @@ def run_one_task(
         log.info("done issue posted: %s", url)
     except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
         print(f"warning: could not post done issue: {exc}", file=sys.stderr)
+    _settle_task_issue(config, issue_number, "Done: the task finished.")
     return 0
 
 

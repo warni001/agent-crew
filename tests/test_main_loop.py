@@ -364,6 +364,7 @@ def _stall_mocks(main_mod, monkeypatch):
     monkeypatch.setattr(main_mod, "report_stalled", stalled)
     monkeypatch.setattr(main_mod, "comment_on_task_issue", comment)
     monkeypatch.setattr(main_mod, "tag_task_stalled", tag)
+    monkeypatch.setattr(main_mod, "close_task_issue", mock.Mock())
     monkeypatch.setattr(main_mod, "report_done", mock.Mock())
     return stalled, comment, tag
 
@@ -424,29 +425,6 @@ def test_stalled_run_without_issue_number_skips_marking(main_mod, config_mod, le
     tag.assert_not_called()
 
 
-def test_finished_run_does_not_comment_or_tag(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
-    """The done path is unchanged: it posts the Done issue and never
-    comments on or tags the original issue."""
-    path = str(tmp_path / "ledger.jsonl")
-    config = make_config(config_mod, CREW_LEDGER_PATH=path)
-    ledger = make_ledger(ledger_mod, tmp_path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
-    monkeypatch.setattr(
-        main_mod, "run_task",
-        _run_task_recording_sign_off(ledger_mod, path, ["merged PR #1"]),
-    )
-    done = mock.Mock(return_value="https://example/1")
-    monkeypatch.setattr(main_mod, "report_done", done)
-    comment = mock.Mock()
-    tag = mock.Mock()
-    monkeypatch.setattr(main_mod, "comment_on_task_issue", comment)
-    monkeypatch.setattr(main_mod, "tag_task_stalled", tag)
-    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=42) == 0
-    done.assert_called_once()
-    comment.assert_not_called()
-    tag.assert_not_called()
-
-
 def test_stall_tolerates_comment_and_label_failure(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
     """A comment or label failure must not fail settlement: the run
     still settles stalled and exits 1."""
@@ -457,6 +435,7 @@ def test_stall_tolerates_comment_and_label_failure(main_mod, config_mod, ledger_
     monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
     stalled = mock.Mock(return_value="https://example/stalled")
     monkeypatch.setattr(main_mod, "report_stalled", stalled)
+    monkeypatch.setattr(main_mod, "close_task_issue", mock.Mock())
     monkeypatch.setattr(
         main_mod, "comment_on_task_issue",
         mock.Mock(side_effect=RuntimeError("gh down")),

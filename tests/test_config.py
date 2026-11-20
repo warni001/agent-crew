@@ -77,7 +77,8 @@ def test_load_config_does_not_read_dotenv(config_mod, tmp_path, monkeypatch):
         config_mod.load_config()
 
 
-def test_from_env_ledger_blob_url_defaults_empty(config_mod, clean_env):
+def test_from_env_ledger_blob_url_defaults_empty(config_mod, clean_env, monkeypatch):
+    monkeypatch.delenv("CREW_LEDGER_BLOB_URL", raising=False)
     cfg = config_mod.CrewConfig.from_env(env=dict(os.environ))
     assert cfg.ledger_blob_url == ""
 
