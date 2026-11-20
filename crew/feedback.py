@@ -103,6 +103,14 @@ def comment_on_task_issue(repo: str, issue_number: int, body: str) -> str:
     )
 
 
+def close_task_issue(repo: str, issue_number: int, comment: str) -> str:
+    """Close the original task issue with an outcome comment."""
+    _check_repo(repo)
+    if type(issue_number) is not int or issue_number < 1:
+        raise ValueError("issue number must be a positive integer")
+    return _gh(repo, ["issue", "close", str(issue_number), "--comment", comment])
+
+
 def ensure_label(repo: str, label: str, description: str, color: str) -> None:
     """Create a label, or update it when it already exists (`--force`).
 
@@ -289,7 +297,7 @@ def report_stalled(repo: str, task: str, summary: str, reason: str = "cap") -> s
 
 
 __all__ = [
-    "open_issue", "comment_issue", "comment_on_task_issue", "ensure_label",
+    "open_issue", "comment_issue", "comment_on_task_issue", "close_task_issue", "ensure_label",
     "tag_task_stalled", "ask_question", "report_done",
     "report_stalled", "done_issue_payload", "stalled_issue_payload",
     "task_text", "list_task_issues",

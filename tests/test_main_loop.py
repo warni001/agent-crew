@@ -353,42 +353,37 @@ def test_main_explicit_task_runs_once(main_mod, ledger_mod, tmp_path, monkeypatc
     assert run_task.await_args.args[1] == "do the thing"
 
 
-# --- stalled runs comment on the original issue and tag it stalled ---
+# --- settlement closes the original issue and tags it on stalls ---
 
 
 def _stall_mocks(main_mod, monkeypatch):
     """Mock the three feedback calls a stall makes; return them."""
     stalled = mock.Mock(return_value="https://example/stalled")
-    comment = mock.Mock(return_value="https://example/comment")
+    close = mock.Mock()
     tag = mock.Mock()
     monkeypatch.setattr(main_mod, "report_stalled", stalled)
-    monkeypatch.setattr(main_mod, "comment_on_task_issue", comment)
+    monkeypatch.setattr(main_mod, "close_task_issue", close)
     monkeypatch.setattr(main_mod, "tag_task_stalled", tag)
     monkeypatch.setattr(main_mod, "report_done", mock.Mock())
-    return stalled, comment, tag
+    return stalled, close, tag
 
 
-def test_stalled_run_comments_and_tags_original_issue(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
-    """No review recorded: the stall comments on the ORIGINAL issue
-    number (not a new issue) with the run summary, and tags it
-    stalled — in addition to the separate stalled issue."""
+def test_stalled_run_closes_and_tags_original_issue(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
     monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
     monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
-    stalled, comment, tag = _stall_mocks(main_mod, monkeypatch)
+    stalled, close, tag = _stall_mocks(main_mod, monkeypatch)
     assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=42) == 1
     stalled.assert_called_once()
-    comment.assert_called_once()
-    assert comment.call_args.args[0] == "warni001/agent-crew"
-    assert comment.call_args.args[1] == 42
-    assert comment.call_args.args[2].startswith("Stalled: no_review")
+    summary = stalled.call_args.args[2]
+    close.assert_called_once_with(config.repo, 42, f"Stalled: no_review\n\n{summary}")
     tag.assert_called_once_with("warni001/agent-crew", 42)
     main_mod.report_done.assert_not_called()
 
 
-def test_review_stalled_run_comments_with_review_reason(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+def test_review_stalled_run_closes_with_review_reason(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
@@ -400,13 +395,13 @@ def test_review_stalled_run_comments_with_review_reason(main_mod, config_mod, le
             pr_number=7, notes="fix the test",
         ),
     )
-    stalled, comment, tag = _stall_mocks(main_mod, monkeypatch)
-    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=7) == 1
-    comment.assert_called_once()
-    assert comment.call_args.args[1] == 7
-    assert comment.call_args.args[2].startswith("Stalled: review")
-    assert "fix the test" in comment.call_args.args[2]
-    tag.assert_called_once_with("warni001/agent-crew", 7)
+    stalled, close, tag = _stall_mocks(main_mod, monkeypatch)
+    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=42) == 1
+    stalled.assert_called_once()
+    summary = stalled.call_args.args[2]
+    assert "fix the test" in summary
+    close.assert_called_once_with(config.repo, 42, f"Stalled: review\n\n{summary}")
+    tag.assert_called_once_with(config.repo, 42)
 
 
 def test_stalled_run_without_issue_number_skips_marking(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
@@ -417,56 +412,62 @@ def test_stalled_run_without_issue_number_skips_marking(main_mod, config_mod, le
     ledger = make_ledger(ledger_mod, tmp_path)
     monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
     monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
-    stalled, comment, tag = _stall_mocks(main_mod, monkeypatch)
+    stalled, close, tag = _stall_mocks(main_mod, monkeypatch)
     assert main_mod.run_one_task(config, ledger, "do the thing") == 1
     stalled.assert_called_once()
-    comment.assert_not_called()
+    close.assert_not_called()
     tag.assert_not_called()
 
 
-def test_finished_run_does_not_comment_or_tag(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
-    """The done path is unchanged: it posts the Done issue and never
-    comments on or tags the original issue."""
+@pytest.mark.parametrize("issue_number", [42, None])
+@pytest.mark.parametrize("failed", [False, True])
+def test_done_or_failed_run_closes_only_source_issue(
+    main_mod, config_mod, ledger_mod, tmp_path, monkeypatch, issue_number, failed
+):
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
     monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
-    monkeypatch.setattr(
-        main_mod, "run_task",
-        _run_task_recording_sign_off(ledger_mod, path, ["merged PR #1"]),
-    )
-    done = mock.Mock(return_value="https://example/1")
-    monkeypatch.setattr(main_mod, "report_done", done)
-    comment = mock.Mock()
-    tag = mock.Mock()
-    monkeypatch.setattr(main_mod, "comment_on_task_issue", comment)
-    monkeypatch.setattr(main_mod, "tag_task_stalled", tag)
-    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=42) == 0
-    done.assert_called_once()
-    comment.assert_not_called()
+    if failed:
+        run = mock.AsyncMock(side_effect=RuntimeError("workflow failed"))
+        comment = "Failed: the workflow raised an exception."
+        event = "task_failed"
+    else:
+        run = _run_task_recording_sign_off(ledger_mod, path, ["merged PR #1"])
+        comment = "Done: the task finished."
+        event = "task_finished"
+    monkeypatch.setattr(main_mod, "run_task", run)
+    stalled, close, tag = _stall_mocks(main_mod, monkeypatch)
+    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number) == int(failed)
+    assert ledger.entries()[-1]["event"] == event
+    if issue_number is None:
+        close.assert_not_called()
+    else:
+        close.assert_called_once_with(config.repo, issue_number, comment)
+    if failed:
+        main_mod.report_done.assert_not_called()
+    else:
+        main_mod.report_done.assert_called_once()
+    stalled.assert_not_called()
     tag.assert_not_called()
 
 
-def test_stall_tolerates_comment_and_label_failure(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
-    """A comment or label failure must not fail settlement: the run
+def test_stall_tolerates_close_and_label_failure(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch, caplog):
+    """A close or label failure must not fail settlement: the run
     still settles stalled and exits 1."""
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
     monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
     monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
-    stalled = mock.Mock(return_value="https://example/stalled")
-    monkeypatch.setattr(main_mod, "report_stalled", stalled)
-    monkeypatch.setattr(
-        main_mod, "comment_on_task_issue",
-        mock.Mock(side_effect=RuntimeError("gh down")),
-    )
-    monkeypatch.setattr(
-        main_mod, "tag_task_stalled",
-        mock.Mock(side_effect=RuntimeError("gh down")),
-    )
+    stalled, close, tag = _stall_mocks(main_mod, monkeypatch)
+    close.side_effect = RuntimeError("gh down")
+    tag.side_effect = RuntimeError("gh down")
     assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=42) == 1
     stalled.assert_called_once()
+    close.assert_called_once()
+    tag.assert_called_once_with(config.repo, 42)
+    assert "could not close task issue #42" in caplog.text
     task_events = [e for e in ledger.entries() if e["event"].startswith("task_")]
     assert [e["event"] for e in task_events] == ["task_started", "task_stalled"]
 
