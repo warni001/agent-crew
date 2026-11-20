@@ -107,6 +107,13 @@ def test_build_workflow_is_sequential_with_chain_only_responses(monkeypatch):
     assert orchestration_mod.build_workflow(config) is not None
     assert [a.name for a in seen["participants"]] == ["planner", "builder", "reviewer", "merger"]
     assert seen["chain_only_agent_responses"] is True
+    # Every agent's response surfaces as an intermediate event, so the
+    # run returns the whole narrative, not just the merger's output.
+    # output_from must name the merger explicitly: with
+    # intermediate_output_from="all_other" alone, the framework
+    # designates no output at all.
+    assert [a.name for a in seen["output_from"]] == ["merger"]
+    assert seen["intermediate_output_from"] == "all_other"
     assert "manager_agent" not in seen
     assert "manager" not in seen
 

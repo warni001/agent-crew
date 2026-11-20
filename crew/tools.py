@@ -16,6 +16,7 @@ escape it. No tool ever prints or returns a token.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import subprocess
@@ -59,13 +60,23 @@ def _run(cmd: list[str], timeout: int = 120, max_output: int | None = _MAX_OUTPU
             cmd, capture_output=True, text=True, timeout=timeout
         )
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"command timed out after {timeout}s: {cmd[0]}")
+        message = f"command timed out after {timeout}s: {cmd[0]}"
+        logging.getLogger("crew.tools").warning("command failed: %s", message)
+        raise RuntimeError(message) from None
     out = (proc.stdout + proc.stderr).strip()
     if proc.returncode != 0:
-        raise RuntimeError(
+        # Log the failure here, with the command and its output: the
+        # framework catches this exception and hands the model a
+        # generic "Error: Function failed." (unless detailed errors
+        # are on), so without this log the container shows only an
+        # opaque RuntimeError — the Nov 20 #9 run stalled on two of
+        # those and nobody could see what the commands even were.
+        message = (
             f"{' '.join(cmd[:3])} failed (exit {proc.returncode}): "
             f"{out[:_MAX_OUTPUT]}"
         )
+        logging.getLogger("crew.tools").warning("command failed: %s", message)
+        raise RuntimeError(message)
     return out if max_output is None else out[:max_output]
 
 
@@ -223,11 +234,19 @@ def run_shell(command: str) -> str:
     """Run one allowlisted shell command (git, pytest, compileall, ls, cat).
 
     Rejects shell metacharacters, so chained commands cannot smuggle
-    anything past the allowlist.
+    anything past the allowlist. Refusals are logged, not just raised:
+    a refusal is a failed tool call too, and the framework's log line
+    for it carries no detail.
     """
     if any(tok in command for tok in _SHELL_FORBIDDEN):
+        logging.getLogger("crew.tools").warning(
+            "run_shell refused command with shell metacharacters: %r", command
+        )
         raise ValueError(f"refusing command with shell metacharacters: {command!r}")
     if not command.startswith(_SHELL_ALLOWED_PREFIXES):
+        logging.getLogger("crew.tools").warning(
+            "run_shell refused command outside the allowlist: %r", command
+        )
         raise ValueError(
             "refusing command outside the allowlist "
             f"(git/pytest/compileall/ls/cat/pwd): {command!r}"

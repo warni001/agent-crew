@@ -28,7 +28,7 @@ from .credit import stop_reason
 from .feedback import list_done_tasks, list_task_issues, report_done, report_stalled
 from .blob_ledger import build_ledger
 from .ledger import Ledger
-from .orchestration import build_workflow, run_task
+from .orchestration import build_workflow, format_run_summary, run_task
 from .spend import TRACKER, reset_spend, restore_spend, spent_usd
 
 # The crew's first task, agreed with the repo owner: build v1 of itself.
@@ -171,42 +171,35 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
         log.error("task failed: %s", exc)
         return 1
 
-    summary = "\n\n".join(str(o) for o in outputs) or "(no output)"
-    if before is not None:
-        sign_offs = _sign_offs_since(config, before)
-        if sign_offs is not None:
-            requested = [
-                s for s in sign_offs if s.get("verdict") == "changes_requested"
-            ]
-            if requested:
-                notes = "\n".join(
-                    f"PR #{s.get('pr_number')}: {s.get('notes', '')}"
-                    for s in requested
-                )
-                _record(ledger, "task_stalled", task=task, reason="review")
-                log.warning(
-                    "task stalled (reviewer requested changes):\n%s", notes
-                )
-                try:
-                    url = report_stalled(
-                        config.repo,
-                        task,
-                        f"Reviewer requested changes:\n{notes}\n\n{summary}",
-                        reason="review",
-                    )
-                    log.info("stalled issue posted: %s", url)
-                except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
-                    print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
-                return 1
-            if not sign_offs:
-                _record(ledger, "task_stalled", task=task, reason="no_review")
-                log.warning("task stalled (no review recorded):\n%s", summary)
-                try:
-                    url = report_stalled(config.repo, task, summary, reason="no_review")
-                    log.info("stalled issue posted: %s", url)
-                except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
-                    print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
-                return 1
+    # One summary for every settlement path: the header (agents ran,
+    # PR, review verdict, first tool failure) plus each agent's
+    # response text. The stalled issue for the Nov 20 #9 run carried
+    # only the merger's output and said nothing about why the run
+    # produced nothing — this is the fix for that.
+    sign_offs = _sign_offs_since(config, before) if before is not None else None
+    summary = format_run_summary(outputs, sign_offs)
+    if sign_offs is not None:
+        requested = [
+            s for s in sign_offs if s.get("verdict") == "changes_requested"
+        ]
+        if requested:
+            _record(ledger, "task_stalled", task=task, reason="review")
+            log.warning("task stalled (reviewer requested changes):\n%s", summary)
+            try:
+                url = report_stalled(config.repo, task, summary, reason="review")
+                log.info("stalled issue posted: %s", url)
+            except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+                print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+            return 1
+        if not sign_offs:
+            _record(ledger, "task_stalled", task=task, reason="no_review")
+            log.warning("task stalled (no review recorded):\n%s", summary)
+            try:
+                url = report_stalled(config.repo, task, summary, reason="no_review")
+                log.info("stalled issue posted: %s", url)
+            except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+                print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+            return 1
     _record(ledger, "task_finished", task=task, outputs=outputs)
     log.info("task finished:\n%s", summary)
     try:

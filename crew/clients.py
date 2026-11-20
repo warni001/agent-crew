@@ -51,6 +51,19 @@ class CountingChatClient(OpenAIChatClient):
     this if streaming is ever used.
     """
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # include_detailed_errors=True: the framework default is False,
+        # so a failed tool call reaches the model as the opaque "Error:
+        # Function failed." — the Nov 20 #9 run stalled with two
+        # run_shell RuntimeErrors nobody could see. The error text
+        # comes from the crew's own tools (command + output, capped);
+        # no secret ever flows through a tool result, so the
+        # framework's sensitive-information caveat does not apply
+        # here. The model seeing the real error is also what lets it
+        # self-correct instead of guessing.
+        self.function_invocation_configuration["include_detailed_errors"] = True
+
     def get_response(
         self,
         messages: Sequence[Message],

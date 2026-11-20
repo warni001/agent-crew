@@ -194,6 +194,7 @@ def test_run_task_refuses_when_tracked_spend_over_line(spend_mod):
     )
     workflow = mock.AsyncMock()
     result = mock.MagicMock()
+    result.get_intermediate_outputs.return_value = []
     result.get_outputs.return_value = ["done"]
     workflow.run.return_value = result
     # Under the line: runs.

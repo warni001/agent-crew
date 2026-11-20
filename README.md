@@ -24,6 +24,11 @@ infra/
   main.bicepparam       parameter file (reads CLAUDE_* and BUDGET_* from
                         the environment)
   deploy.sh             deploy from your Mac (where `az` lives)
+scripts/
+  crew-diag.sh          container revisions, logs, PRs, issues, token usage
+  crew-spend.sh         live spend from the blob ledger (guard: $190)
+  v1-probe.py           frozen Nov 19 probe that proved api-version=preview
+                        on the /openai/v1 path — Magentic-era, not runnable
 ```
 
 ## Deploy
