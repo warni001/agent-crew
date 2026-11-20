@@ -12,6 +12,7 @@ open a new issue to re-queue it.
 Loads config from env, validates it, builds the sequential workflow, runs
 one task, records the run in the ledger, and posts a "done" issue update.
 A failed feedback post warns on stderr but does not fail the run.
+Queued tasks also close their source issue with the recorded outcome.
 """
 
 from __future__ import annotations
@@ -25,7 +26,9 @@ import time
 
 from .config import CrewConfig
 from .credit import stop_reason
-from .feedback import list_done_tasks, list_task_issues, report_done, report_stalled
+from .feedback import (
+    close_task_issue, list_done_tasks, list_task_issues, report_done, report_stalled,
+)
 from .blob_ledger import build_ledger
 from .ledger import Ledger
 from .orchestration import build_workflow, format_run_summary, run_task
@@ -90,8 +93,8 @@ def _sign_offs_since(config: CrewConfig, before: int) -> list[dict] | None:
         return None
 
 
-def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
-    """Pick the next task, or None when there is nothing to do.
+def next_task(config: CrewConfig, ledger: Ledger) -> tuple[str, int | None] | None:
+    """Pick the next task and its source issue number, or None if idle.
 
     First run: the default self-build task, unless it is already done.
     After that: the oldest open `crew-task` issue whose task is not
@@ -106,7 +109,7 @@ def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
     except Exception as exc:  # noqa: BLE001 - a poll failure is not fatal
         log.warning("could not list done issues: %s", exc)
     if DEFAULT_TASK not in done:
-        return DEFAULT_TASK
+        return DEFAULT_TASK, None
     try:
         issues = list_task_issues(config.repo)
     except Exception as exc:  # noqa: BLE001 - a poll failure is not fatal
@@ -114,7 +117,7 @@ def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
         return None
     for issue in issues:
         if issue["task"] not in done:
-            return issue["task"]
+            return issue["task"], issue["number"]
     return None
 
 
@@ -145,7 +148,18 @@ def _record_spend(ledger: Ledger) -> None:
     )
 
 
-def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
+def _close_source_issue(repo: str, issue_number: int | None, outcome: str) -> None:
+    if issue_number is None:
+        return
+    try:
+        close_task_issue(repo, issue_number, outcome)
+    except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+        logging.getLogger("crew").warning("could not close task issue #%s: %s", issue_number, exc)
+
+
+def run_one_task(
+    config: CrewConfig, ledger: Ledger, task: str, issue_number: int | None = None,
+) -> int:
     """Run a single task through the crew. Returns the exit code.
 
     The reviewer is the gate: after the workflow finishes, the run
@@ -168,6 +182,7 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
         outputs = asyncio.run(run_task(workflow, task, config))
     except Exception as exc:  # noqa: BLE001 - report the failure, then exit 1
         _record(ledger, "task_failed", task=task, error=str(exc))
+        _close_source_issue(config.repo, issue_number, "failed")
         log.error("task failed: %s", exc)
         return 1
 
@@ -184,6 +199,7 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
         ]
         if requested:
             _record(ledger, "task_stalled", task=task, reason="review")
+            _close_source_issue(config.repo, issue_number, "stalled")
             log.warning("task stalled (reviewer requested changes):\n%s", summary)
             try:
                 url = report_stalled(config.repo, task, summary, reason="review")
@@ -193,6 +209,7 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
             return 1
         if not sign_offs:
             _record(ledger, "task_stalled", task=task, reason="no_review")
+            _close_source_issue(config.repo, issue_number, "stalled")
             log.warning("task stalled (no review recorded):\n%s", summary)
             try:
                 url = report_stalled(config.repo, task, summary, reason="no_review")
@@ -201,6 +218,7 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
                 print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
             return 1
     _record(ledger, "task_finished", task=task, outputs=outputs)
+    _close_source_issue(config.repo, issue_number, "done")
     log.info("task finished:\n%s", summary)
     try:
         url = report_done(config.repo, task, summary)
@@ -264,13 +282,14 @@ def main(argv: list[str] | None = None) -> int:
         if reason:
             log.info("stopping: %s", reason)
             return 0
-        task = next_task(config, ledger)
-        if task is None:
+        queued = next_task(config, ledger)
+        if queued is None:
             log.info("no task queued, sleeping %ss", interval)
             time.sleep(interval)
             continue
+        task, issue_number = queued
         log.info("picked up task: %s", task[:120])
-        run_one_task(config, ledger, task)
+        run_one_task(config, ledger, task, issue_number)
         _record_spend(ledger)
         time.sleep(interval)
 

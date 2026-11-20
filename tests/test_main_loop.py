@@ -106,7 +106,7 @@ def test_default_task_first(main_mod, config_mod, ledger_mod, tmp_path, monkeypa
     ledger = make_ledger(ledger_mod, tmp_path)
     monkeypatch.setattr(main_mod, "list_done_tasks", lambda repo: set())
     monkeypatch.setattr(main_mod, "list_task_issues", lambda repo: [])
-    assert main_mod.next_task(config, ledger) == main_mod.DEFAULT_TASK
+    assert main_mod.next_task(config, ledger) == (main_mod.DEFAULT_TASK, None)
 
 
 def test_default_task_skipped_when_done(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
@@ -116,7 +116,7 @@ def test_default_task_skipped_when_done(main_mod, config_mod, ledger_mod, tmp_pa
     queued = [issue(1, "Next job", "do it")]
     monkeypatch.setattr(main_mod, "list_done_tasks", lambda repo: set())
     monkeypatch.setattr(main_mod, "list_task_issues", lambda repo: queued)
-    assert main_mod.next_task(config, ledger) == "Next job\n\ndo it"
+    assert main_mod.next_task(config, ledger) == ("Next job\n\ndo it", 1)
 
 
 def test_picks_oldest_unfinished(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
@@ -127,7 +127,7 @@ def test_picks_oldest_unfinished(main_mod, config_mod, ledger_mod, tmp_path, mon
     queued = [issue(1, "Old job"), issue(2, "New job")]
     monkeypatch.setattr(main_mod, "list_done_tasks", lambda repo: set())
     monkeypatch.setattr(main_mod, "list_task_issues", lambda repo: queued)
-    assert main_mod.next_task(config, ledger) == "New job"
+    assert main_mod.next_task(config, ledger) == ("New job", 2)
 
 
 def test_failed_task_is_not_retried(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):

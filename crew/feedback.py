@@ -131,6 +131,17 @@ def comment_issue(repo: str, issue_number: int, body: str) -> str:
     )
 
 
+def close_task_issue(repo: str, issue_number: int, outcome: str) -> str:
+    """Close the original queued issue with a comment naming the outcome."""
+    _check_repo(repo)
+    if type(issue_number) is not int or issue_number < 1:
+        raise ValueError("issue number must be a positive integer")
+    return _run(
+        ["gh", "issue", "close", str(issue_number), "--repo", repo,
+         "--comment", f"Crew outcome: {outcome}."]
+    )
+
+
 def ask_question(repo: str, question: str, context: str = "") -> str:
     """Ask the repo owner a question via an issue. Fire-and-forget: the
     crew keeps working and never waits for a reply."""
@@ -213,7 +224,7 @@ def report_stalled(repo: str, task: str, summary: str, reason: str = "cap") -> s
 
 
 __all__ = [
-    "open_issue", "comment_issue", "ask_question", "report_done",
+    "open_issue", "comment_issue", "close_task_issue", "ask_question", "report_done",
     "report_stalled", "done_issue_payload", "stalled_issue_payload",
     "task_text", "list_task_issues",
     "list_done_tasks", "TASK_LABEL", "DONE_TITLE_PREFIX",
