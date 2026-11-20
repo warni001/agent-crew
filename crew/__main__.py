@@ -28,6 +28,7 @@ from .feedback import list_done_tasks, list_task_issues, report_done, report_sta
 from .blob_ledger import build_ledger
 from .ledger import Ledger
 from .orchestration import build_workflow, run_task
+from .spend import TRACKER, reset_spend, restore_spend, spent_usd
 
 # The crew's first task, agreed with the repo owner: build v1 of itself.
 DEFAULT_TASK = (
@@ -126,6 +127,21 @@ def _record(ledger: Ledger, event: str, **fields: object) -> None:
         logging.getLogger("crew").warning("ledger %s failed: %s", event, exc)
 
 
+def _record_spend(ledger: Ledger) -> None:
+    """Best-effort `spend` event: the cumulative total at a boundary.
+
+    The tracker restores from the last `spend` event after a restart,
+    so these events — every $5 crossed plus each task boundary — are
+    what keeps the total honest across restarts.
+    """
+    _record(
+        ledger,
+        "spend",
+        usd=round(spent_usd(), 4),
+        by_model=TRACKER.snapshot()["by_model"],
+    )
+
+
 def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
     """Run a single task through the crew. Returns the exit code."""
     log = logging.getLogger("crew")
@@ -191,16 +207,29 @@ def main(argv: list[str] | None = None) -> int:
 
     ledger = build_ledger(config)
 
+    # Spend tracking starts here: seed from the manual offset (spend
+    # incurred before this guard existed), restore the total from the
+    # last `spend` ledger event, and write a `spend` event at every
+    # $5 crossed so a restart loses at most $5 of history.
+    reset_spend(config.budget_spent_usd, config.budget_limit_usd)
+    TRACKER.on_milestone = lambda usd, snap: _record(
+        ledger, "spend", usd=usd, by_model=snap["by_model"]
+    )
+    restore_spend(ledger.entries())
+    log.info("tracked spend at startup: $%.2f", spent_usd())
+
     # One-shot mode: an explicit task runs once and exits.
     if args.task:
-        return run_one_task(config, ledger, args.task)
+        code = run_one_task(config, ledger, args.task)
+        _record_spend(ledger)
+        return code
 
     # Loop mode: default task first, then the issue queue, until the
     # credit/deadline stop rule fires.
     interval = poll_seconds()
     while True:
         reason = stop_reason(
-            config.budget_spent_usd, config.budget_limit_usd, config.deadline_iso
+            spent_usd(), config.budget_limit_usd, config.deadline_iso
         )
         if reason:
             log.info("stopping: %s", reason)
@@ -212,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         log.info("picked up task: %s", task[:120])
         run_one_task(config, ledger, task)
+        _record_spend(ledger)
         time.sleep(interval)
 
 

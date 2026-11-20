@@ -15,9 +15,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_framework import Agent
-from agent_framework.foundry import FoundryChatClient
 from azure.identity import DefaultAzureCredential
 
+from .clients import CountingChatClient
 from .config import CrewConfig
 from .tools import BUILD_TOOLS, MERGE_TOOLS, READ_TOOLS, REVIEW_TOOLS
 
@@ -90,13 +90,16 @@ def load_ponytail(repo_root: str | Path = ".") -> str:
     return PONYTAIL_CHECKLIST
 
 
-def make_chat_client(config: CrewConfig, model: str) -> FoundryChatClient:
-    """Foundry chat client for one model deployment.
+def make_chat_client(config: CrewConfig, model: str) -> CountingChatClient:
+    """Foundry chat client for one model deployment, counting spend.
 
     Auth is Entra ID via DefaultAzureCredential (the container app's
     managed identity at runtime). No key or token is handled here.
+    Every call is priced from API-reported usage into the process
+    spend tracker (crew/spend.py); at $190 the client refuses
+    further calls.
     """
-    return FoundryChatClient(
+    return CountingChatClient(
         project_endpoint=config.foundry_project_endpoint,
         model=model,
         credential=DefaultAzureCredential(),

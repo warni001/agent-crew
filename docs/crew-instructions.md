@@ -122,7 +122,13 @@ error naming the variable.
 - **Budget:** $200. Stop work at **$190 (95%)** — the kill-switch
   budget fires at 95% and deletes the resource group. Cost data
   lands 8–24h late, so $190 is a backstop, not a real-time cutoff:
-  stop yourself first.
+  stop yourself first. Two faster layers do that for you: metric
+  alerts on Foundry token usage fire the same kill switch at $40 of
+  tokens per deployment per day (see `infra/alerts.bicep`), and the
+  crew itself counts every call from API-reported usage
+  (`crew/spend.py`, `crew/clients.py`) and refuses the next call
+  once tracked spend reaches $190. One call can still cross the
+  line — the overshoot is bounded by a single call's cost.
 - **Hard deadline:** Sat Nov 21 5pm ET. The kill-switch Logic App
   fires then whether or not the budget fired. Stop before it.
 
