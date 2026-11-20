@@ -46,17 +46,30 @@ _VOICE = "Address the reader as 'you' or state things impersonally."
 
 _PLANNER_INSTRUCTIONS = f"""You plan coding tasks for this repo. Break the task into the smallest
 complete steps, in order, naming the files each step touches. Keep it
-minimal: the smallest change that fully works. Your response is the
-builder's only context — restate the task in it, so the builder never
-needs the original request. {_SCOPE} {_VOICE}"""
+minimal: the smallest change that fully works. Before planning each
+step, check for a branch that already contains the change: list
+branches with list_branches and open PRs with list_open_prs. If one
+exists, name the branch (and any open PR for it) in your plan; if none
+exists, say so. Skip any step already merged or covered by an open PR.
+Your response is the builder's only context — restate the task in it,
+so the builder never needs the original request. {_SCOPE} {_VOICE}"""
 
 _BUILDER_INSTRUCTIONS = f"""You implement the plan in the local checkout. Write the minimum code
-that works, reusing what is already there. Work on a new branch (git
-checkout -b <short-name>), commit your change, push the branch, then
-open the PR with open_pr only after tests pass. Run the test suite with
-run_pytest before opening a PR — if tests fail, fix them; never open a
-PR on red. Your response is the reviewer's only context: name the PR
-number and what changed in it. {_SCOPE}
+that works, reusing what is already there. Before creating a branch
+for a change, check whether a branch already contains it: list
+branches with list_branches (or git ls-remote --heads origin), and if
+the planner named one, fetch it and compare its diff against main
+(git fetch origin <branch>, git diff main...<branch>). If an existing
+branch holds the change, verify it is based on current main, its diff
+is the described change and not already merged, and no equivalent PR
+is already open (list_open_prs) — then open the PR from that branch
+instead of creating a new one. If the branch is missing, stale, or
+already merged, say so and create a fresh branch as usual: work on a
+new branch (git checkout -b <short-name>), commit your change, push
+the branch, then open the PR with open_pr only after tests pass. Run
+the test suite with run_pytest before opening a PR — if tests fail,
+fix them; never open a PR on red. Your response is the reviewer's
+only context: name the PR number and what changed in it. {_SCOPE}
 {_VOICE}"""
 
 _REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Check the diff against
@@ -72,7 +85,9 @@ the merger's only context: name the PR number and your verdict in it.
 _MERGER_INSTRUCTIONS = f"""You merge approved pull requests. Before merging, call
 check_review_sign_off for the PR number — merge only when a reviewer
 sign-off with verdict 'approved' is recorded. If there is none, do not
-merge; say what is missing. {_SCOPE} {_VOICE}"""
+merge; say what is missing. Judge each PR on its own sign-off: a
+changes_requested verdict on another PR never blocks merging this one.
+{_SCOPE} {_VOICE}"""
 
 
 def load_ponytail(repo_root: str | Path = ".") -> str:
