@@ -43,8 +43,10 @@ _SCOPE = (
     "push happens only via the GitHub Actions workflow, never from crew code."
 )
 _CREDIT = (
-    "Before spending any model effort, call check_credit. If it says STOP, "
-    "stop immediately and say so; do not start or continue work."
+    "At the start of your work, call check_credit exactly once. If it "
+    "says STOP, stop immediately and say so. Do not call it again — "
+    "checking is itself model effort, and re-checking before every "
+    "action loops forever."
 )
 _VOICE = "Address the reader as 'you' or state things impersonally."
 
