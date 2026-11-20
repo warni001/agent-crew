@@ -264,6 +264,35 @@ def test_changes_requested_sign_off_records_stalled(main_mod, config_mod, ledger
     done.assert_not_called()
 
 
+@pytest.mark.parametrize("failure", ["initial", "final"])
+def test_unreadable_sign_off_ledger_stalls(
+    main_mod, config_mod, ledger_mod, tmp_path, monkeypatch, failure,
+):
+    ledger = make_ledger(ledger_mod, tmp_path)
+    path = str(ledger.path)
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    error = OSError("unreadable sign-off ledger")
+    reads = [error] if failure == "initial" else [[], error]
+    monkeypatch.setattr(ledger_mod.Ledger, "sign_offs", mock.Mock(side_effect=reads))
+    monkeypatch.setattr(main_mod, "build_workflow", mock.Mock())
+    monkeypatch.setattr(
+        main_mod, "run_task", _run_task_recording_sign_off(ledger_mod, path, ["output"]),
+    )
+    stalled = mock.Mock()
+    done = mock.Mock()
+    monkeypatch.setattr(main_mod, "report_stalled", stalled)
+    monkeypatch.setattr(main_mod, "report_done", done)
+
+    assert main_mod.run_one_task(config, ledger, "task") == 1
+    events = [e for e in ledger.entries() if e["event"].startswith("task_")]
+    assert [e["event"] for e in events] == ["task_started", "task_stalled"]
+    assert events[-1]["reason"] == "review_unavailable"
+    stalled.assert_called_once()
+    assert stalled.call_args.kwargs["reason"] == "review_unavailable"
+    assert "unknown (sign-off ledger unreadable)" in stalled.call_args.args[2]
+    done.assert_not_called()
+
+
 def test_no_sign_off_records_stalled(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
     """No review recorded means nothing shipped: the run stalls
     instead of claiming a finish with zero PRs (the Nov 19
