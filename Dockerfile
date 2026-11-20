@@ -26,16 +26,26 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir pytest==9.2.0
 
-COPY crew/ ./crew/
+# The whole repo context, not just crew/: the builder works in a real
+# checkout — it branches, commits, and pushes (needs .git/), runs the
+# suite (needs tests/), and reads ponytail.md, docs/, and AGENTS.md.
+# Exclusions (.env, .venv, .github, infra) live in .dockerignore.
+# .git/ is ~1.6M; the Actions checkout is shallow, which is fine for
+# branching and pushing.
+COPY . .
 
 # /app was built as root; the crew runs as appuser and must be able to
 # write here (the ledger, and any file the builder writes). Without
 # this, the first ledger write dies with PermissionError and the
 # container restarts in a loop.
 RUN useradd --create-home --uid 10001 appuser \
-    && chown -R appuser:appuser /app
+    && chown -R appuser:appuser /app \
+    && chmod +x /app/entrypoint.sh
 USER appuser
 
-# No task argument: the crew runs its default self-build task first,
-# then polls GitHub issues labelled `crew-task` every 60 seconds.
+# The entrypoint wires git auth (gh as credential helper) and git
+# identity, then runs the crew. No task argument: the crew runs its
+# default self-build task first, then polls GitHub issues labelled
+# `crew-task` every 60 seconds.
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python", "-m", "crew"]

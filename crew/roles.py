@@ -49,9 +49,11 @@ complete steps, in order, naming the files each step touches. Keep it
 minimal: the smallest change that fully works. {_SCOPE} {_VOICE}"""
 
 _BUILDER_INSTRUCTIONS = f"""You implement the plan in the local checkout. Write the minimum code
-that works, reusing what is already there. Run the test suite with
+that works, reusing what is already there. Work on a new branch (git
+checkout -b <short-name>), commit your change, push the branch, then
+open the PR with open_pr only after tests pass. Run the test suite with
 run_pytest before opening a PR — if tests fail, fix them; never open a
-PR on red. Open the PR with open_pr only after tests pass. {_SCOPE}
+PR on red. {_SCOPE}
 {_VOICE}"""
 
 _REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Check the diff against
@@ -78,9 +80,8 @@ via an issue and move on; never wait.
 def load_ponytail(repo_root: str | Path = ".") -> str:
     """Ponytail rules from ponytail.md in the repo root, if present.
 
-    Falls back to the checklist embedded above — this repo has no
-    ponytail.md at its root yet, so the embedded checklist is what
-    ships today.
+    Falls back to the checklist embedded above when the file is
+    absent (e.g. a minimal checkout without the repo root).
     """
     path = Path(repo_root) / "ponytail.md"
     if path.is_file():
@@ -104,36 +105,58 @@ def make_chat_client(config: CrewConfig, model: str) -> OpenAIChatClient:
 
 
 def build_roles(config: CrewConfig) -> dict[str, Agent]:
-    """The four role agents plus the Magentic manager agent."""
+    """The four role agents plus the Magentic manager agent.
+
+    Every agent runs with ``store=False``: no server-side Responses
+    chaining. Magentic shares each participant's tool transcript with
+    every other participant, but each agent owns a separate Responses
+    chain — under chaining the client strips the foreign
+    ``function_call`` yet still emits its ``function_result``, and
+    Azure 400s ("No tool call found for function call output"). With
+    store=False every call is a stateless full-item replay, where
+    call and output always travel together; the auto-injected
+    InMemoryHistoryProvider keeps full local history, so no context
+    is lost. Cost: full history re-sent per call (higher prompt
+    tokens; prompt caching softens it). The framework default is
+    store=True; we deviate for this reason. Verified against
+    installed agent-framework-openai 1.18.2: ``store is False``
+    makes ``_get_conversation_id`` return None.
+    """
     ponytail = load_ponytail()
+    no_store = {"store": False}
     planner = Agent(
         make_chat_client(config, config.planner_model),
         instructions=_PLANNER_INSTRUCTIONS,
         name="planner",
         tools=READ_TOOLS,
+        default_options=no_store,
     )
     builder = Agent(
         make_chat_client(config, config.builder_model),
         instructions=_BUILDER_INSTRUCTIONS,
         name="builder",
         tools=BUILD_TOOLS,
+        default_options=no_store,
     )
     reviewer = Agent(
         make_chat_client(config, config.reviewer_model),
         instructions=_REVIEWER_INSTRUCTIONS.format(ponytail=ponytail),
         name="reviewer",
         tools=REVIEW_TOOLS,
+        default_options=no_store,
     )
     merger = Agent(
         make_chat_client(config, config.merger_model),
         instructions=_MERGER_INSTRUCTIONS,
         name="merger",
         tools=MERGE_TOOLS,
+        default_options=no_store,
     )
     manager = Agent(
         make_chat_client(config, config.manager_model),
         instructions=_MANAGER_INSTRUCTIONS,
         name="manager",
+        default_options=no_store,
     )
     return {
         "planner": planner,
