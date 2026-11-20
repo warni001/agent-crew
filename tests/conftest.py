@@ -90,6 +90,7 @@ if not _REAL_SDK_PRESENT:
             "MagenticBuilder",
             "StandardMagenticManager",
             "MagenticManagerBase",
+            "SequentialBuilder",
         ),
         # Foundry chat client: separate agent_framework_foundry package
         "agent_framework_foundry": ("FoundryChatClient", "FoundryAgent"),

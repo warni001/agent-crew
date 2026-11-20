@@ -160,21 +160,30 @@ the interval) and takes the oldest one it has not already finished
 or failed. A task that failed is not retried automatically — it needs
 a new issue to re-queue it.
 
-A run is capped at 30 Magentic rounds (`CREW_MAX_ROUNDS` overrides).
-Hitting the cap is a stall, not a finish: the crew records
-`task_stalled` and posts a `[crew] Stalled:` issue, and the loop does
-not re-run the task on its own. Re-queue a stalled task with a
-refined issue — narrower scope, or a higher round cap.
+A run is a single pass: planner, builder, reviewer, merger, in
+that order, each seeing only the previous agent's response. There
+is no round cap and no replanning. The reviewer is the gate: the
+merger merges only on an approved sign-off. If the reviewer
+requests changes, or no review is recorded at all, the run settles
+as stalled, not finished — the crew records `task_stalled` and
+posts a `[crew] Stalled:` issue, and the loop does not re-run the
+task on its own. Re-queue a stalled task with a refined issue that
+addresses the review notes.
 
-## Orchestration (Magentic — verified against agent-framework 1.26.0)
+## Orchestration (sequential — verified against agent-framework 1.26.0)
 
-- Magentic lives in `agent_framework.orchestrations` — there is no
-  `agent_framework.magentic` module.
-- `MagenticOrchestrator(manager, participant_registry, *,
-  require_plan_signoff=False)`; build it with `MagenticBuilder`
-  (`.build()`, `.with_checkpointing()`, `.with_plan_review()`).
-- The manager is a `StandardMagenticManager` (or a
-  `MagenticManagerBase` subclass).
+- Sequential lives in `agent_framework.orchestrations` — there is
+  no `agent_framework.magentic` module.
+- Build it with `SequentialBuilder(participants=[...],
+  chain_only_agent_responses=True)` (`.build()`). With
+  `chain_only_agent_responses=True` each agent receives only the
+  previous agent's response messages, not the full conversation —
+  that is what keeps each agent's Responses chain free of other
+  agents' tool transcripts (a foreign tool result in your chain
+  400s: "No tool call found for function call output"). Each agent
+  runs with the framework default `store=True`; do not set
+  `store=False` — that was the Nov 19 Magentic workaround, and it
+  re-sends the full history on every call.
 - Agents are `agent_framework.Agent(client, instructions, ...)` —
   the chat client is the first positional argument. There is no
   `ChatAgent` in 1.26.0; do not use that name.

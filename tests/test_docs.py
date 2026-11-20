@@ -173,13 +173,12 @@ def test_crew_instructions_points_at_ponytail(repo_root):
     assert "Reviewer" in text
 
 
-def test_crew_instructions_names_verified_magentic_api(repo_root):
-    """Magentic entry points as verified against installed 1.26.0."""
+def test_crew_instructions_names_verified_sequential_api(repo_root):
+    """Sequential entry points as verified against installed 1.26.0."""
     text = _read(repo_root, "docs/crew-instructions.md")
     assert "agent_framework.orchestrations" in text
-    assert "MagenticOrchestrator" in text
-    assert "MagenticBuilder" in text
-    assert "StandardMagenticManager" in text
+    assert "SequentialBuilder" in text
+    assert "chain_only_agent_responses" in text
     # The doc must state the negatives explicitly — no magentic module,
     # no ChatAgent — so nobody writes them from memory.
     lower = text.lower()

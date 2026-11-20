@@ -210,11 +210,20 @@ def test_poll_seconds_env_override(main_mod, monkeypatch):
     assert main_mod.poll_seconds() == 30
 
 
-def test_limit_hit_detects_round_and_reset(main_mod):
-    assert main_mod._limit_hit(["Workflow terminated due to reaching maximum round count."]) == "round"
-    assert main_mod._limit_hit(["Workflow terminated due to reaching maximum reset count."]) == "reset"
-    assert main_mod._limit_hit(["done"]) is None
-    assert main_mod._limit_hit([]) is None
+def _record_sign_off(ledger_mod, path, verdict="approved", pr_number=1, notes=""):
+    """A reviewer sign-off in the local sign-off ledger file."""
+    ledger_mod.Ledger(path).record(
+        "review_sign_off", pr_number=pr_number, verdict=verdict, notes=notes
+    )
+
+
+def _run_task_recording_sign_off(ledger_mod, path, outputs, verdict="approved", **kw):
+    """A mocked run_task that records a sign-off mid-run, like the
+    real reviewer tool does, then returns the workflow outputs."""
+    async def _run(workflow, task, config):
+        _record_sign_off(ledger_mod, path, verdict=verdict, **kw)
+        return outputs
+    return mock.AsyncMock(side_effect=_run)
 
 
 def test_stalled_issue_payload(feedback_mod):
@@ -227,50 +236,116 @@ def test_stalled_issue_payload(feedback_mod):
         feedback_mod.stalled_issue_payload("Fix X", "")
 
 
-def test_cap_termination_records_stalled_not_finished(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
-    """The first live self-build hit the round cap and was recorded
-    task_finished with a Done issue and zero PRs. A cap termination
-    must record task_stalled and post a Stalled issue instead."""
-    config = make_config(config_mod)
+def test_changes_requested_sign_off_records_stalled(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """A reviewer changes_requested settles the task as stalled with
+    the review notes — never as finished."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
     monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
-    run_task = mock.AsyncMock(
-        return_value=["Workflow terminated due to reaching maximum round count."]
+    monkeypatch.setattr(
+        main_mod, "run_task",
+        _run_task_recording_sign_off(
+            ledger_mod, path, ["merged nothing"], verdict="changes_requested",
+            pr_number=7, notes="fix the test",
+        ),
     )
-    monkeypatch.setattr(main_mod, "run_task", run_task)
     stalled = mock.Mock(return_value="https://example/2")
     monkeypatch.setattr(main_mod, "report_stalled", stalled)
     done = mock.Mock()
     monkeypatch.setattr(main_mod, "report_done", done)
     assert main_mod.run_one_task(config, ledger, "do the thing") == 1
-    events = [e["event"] for e in ledger.entries()]
-    assert events == ["task_started", "task_stalled"]
-    assert ledger.entries()[1]["limit"] == "round"
+    task_events = [e for e in ledger.entries() if e["event"].startswith("task_")]
+    assert [e["event"] for e in task_events] == ["task_started", "task_stalled"]
+    assert task_events[1]["reason"] == "review"
     stalled.assert_called_once()
+    assert stalled.call_args.kwargs["reason"] == "review"
+    assert "fix the test" in stalled.call_args.args[2]
     done.assert_not_called()
 
 
-def test_ledger_failure_does_not_kill_run(main_mod, config_mod, monkeypatch):
+def test_no_sign_off_records_stalled(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """No review recorded means nothing shipped: the run stalls
+    instead of claiming a finish with zero PRs (the Nov 19
+    hollow-done mistake)."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
+    stalled = mock.Mock(return_value="https://example/2")
+    monkeypatch.setattr(main_mod, "report_stalled", stalled)
+    done = mock.Mock()
+    monkeypatch.setattr(main_mod, "report_done", done)
+    assert main_mod.run_one_task(config, ledger, "do the thing") == 1
+    task_events = [e for e in ledger.entries() if e["event"].startswith("task_")]
+    assert [e["event"] for e in task_events] == ["task_started", "task_stalled"]
+    assert task_events[1]["reason"] == "no_review"
+    assert stalled.call_args.kwargs["reason"] == "no_review"
+    done.assert_not_called()
+
+
+def test_approved_sign_off_finishes(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """An approved sign-off during the run lets it finish."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(
+        main_mod, "run_task",
+        _run_task_recording_sign_off(ledger_mod, path, ["merged PR #1"]),
+    )
+    monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
+    assert main_mod.run_one_task(config, ledger, "do the thing") == 0
+    task_events = [e for e in ledger.entries() if e["event"].startswith("task_")]
+    assert [e["event"] for e in task_events] == ["task_started", "task_finished"]
+
+
+def test_stale_sign_off_before_run_is_ignored(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """A changes_requested from an earlier run must not stall this
+    one: only sign-offs recorded during this run count."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    _record_sign_off(ledger_mod, path, verdict="changes_requested", pr_number=3, notes="old")
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(
+        main_mod, "run_task",
+        _run_task_recording_sign_off(ledger_mod, path, ["merged PR #4"]),
+    )
+    monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
+    assert main_mod.run_one_task(config, ledger, "do the thing") == 0
+
+
+def test_ledger_failure_does_not_kill_run(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
     """A ledger PermissionError (the live crash-loop cause) warns and the
-    task still runs: the ledger is an audit trail, not the work itself."""
-    config = make_config(config_mod)
+    task still runs: the ledger is an audit trail, not the work itself.
+    The run still needs its approved sign-off to finish — recorded
+    here into the sign-off file the gate reads, like the real
+    reviewer tool does."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = mock.Mock()
     ledger.record.side_effect = PermissionError("Permission denied")
     ledger.entries.return_value = []
     monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
-    run_task = mock.AsyncMock(return_value=["done"])
-    monkeypatch.setattr(main_mod, "run_task", run_task)
+    monkeypatch.setattr(
+        main_mod, "run_task",
+        _run_task_recording_sign_off(ledger_mod, path, ["done"]),
+    )
     monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
     assert main_mod.run_one_task(config, ledger, "do the thing") == 0
+    run_task = main_mod.run_task
     run_task.assert_awaited_once()
 
 
-def test_main_explicit_task_runs_once(main_mod, tmp_path, monkeypatch):
+def test_main_explicit_task_runs_once(main_mod, ledger_mod, tmp_path, monkeypatch):
+    path = str(tmp_path / "ledger.jsonl")
     monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", PROJECT_ENDPOINT)
     monkeypatch.setenv("KEY_VAULT_URL", "https://kv-example.vault.azure.net/")
-    monkeypatch.setenv("CREW_LEDGER_PATH", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.setenv("CREW_LEDGER_PATH", path)
     monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
-    run_task = mock.AsyncMock(return_value=["done"])
+    run_task = _run_task_recording_sign_off(ledger_mod, path, ["done"])
     monkeypatch.setattr(main_mod, "run_task", run_task)
     monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
     assert main_mod.main(["do the thing"]) == 0

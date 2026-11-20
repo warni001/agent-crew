@@ -1,8 +1,8 @@
-"""Role agents. One frontier model per role, Magentic manager included.
+"""Role agents. One frontier model per role.
 
-Planner + Reviewer run on Astra; Builder + Merger run on Sol; the
-Magentic manager runs on Astra. Deployment names (gpt-6-2-astra /
-gpt-6-2-sol) come from config, overridable by env.
+Planner + Reviewer run on Astra; Builder + Merger run on Sol.
+Deployment names (gpt-6-2-astra / gpt-6-2-sol) come from config,
+overridable by env.
 
 All API use below was verified against the installed packages
 (agent-framework 1.26.0, agent-framework-openai 1.18.2) — not written
@@ -46,22 +46,26 @@ _VOICE = "Address the reader as 'you' or state things impersonally."
 
 _PLANNER_INSTRUCTIONS = f"""You plan coding tasks for this repo. Break the task into the smallest
 complete steps, in order, naming the files each step touches. Keep it
-minimal: the smallest change that fully works. {_SCOPE} {_VOICE}"""
+minimal: the smallest change that fully works. Your response is the
+builder's only context — restate the task in it, so the builder never
+needs the original request. {_SCOPE} {_VOICE}"""
 
 _BUILDER_INSTRUCTIONS = f"""You implement the plan in the local checkout. Write the minimum code
 that works, reusing what is already there. Work on a new branch (git
 checkout -b <short-name>), commit your change, push the branch, then
 open the PR with open_pr only after tests pass. Run the test suite with
 run_pytest before opening a PR — if tests fail, fix them; never open a
-PR on red. {_SCOPE}
+PR on red. Your response is the reviewer's only context: name the PR
+number and what changed in it. {_SCOPE}
 {_VOICE}"""
 
 _REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Check the diff against
 the Ponytail checklist below, verify tests passed, and verify nothing
 outside the task scope crept in. Record your verdict with
 record_sign_off (verdict 'approved' or 'changes_requested', with notes).
-Only an 'approved' sign-off lets the merger proceed. {_SCOPE}
-{_VOICE}
+Only an 'approved' sign-off lets the merger proceed. Your response is
+the merger's only context: name the PR number and your verdict in it.
+{_SCOPE} {_VOICE}
 
 {{ponytail}}"""
 
@@ -69,12 +73,6 @@ _MERGER_INSTRUCTIONS = f"""You merge approved pull requests. Before merging, cal
 check_review_sign_off for the PR number — merge only when a reviewer
 sign-off with verdict 'approved' is recorded. If there is none, do not
 merge; say what is missing. {_SCOPE} {_VOICE}"""
-
-_MANAGER_INSTRUCTIONS = f"""You coordinate the crew: hand the task to the planner, then the
-builder, then the reviewer, then the merger, in that order. Keep rounds
-tight — stop when the work is done. If a step is blocked, ask a question
-via an issue and move on; never wait.
-{_SCOPE} {_VOICE}"""
 
 
 def load_ponytail(repo_root: str | Path = ".") -> str:
@@ -105,65 +103,52 @@ def make_chat_client(config: CrewConfig, model: str) -> OpenAIChatClient:
 
 
 def build_roles(config: CrewConfig) -> dict[str, Agent]:
-    """The four role agents plus the Magentic manager agent.
+    """The four role agents, in pipeline order.
 
-    Every agent runs with ``store=False``: no server-side Responses
-    chaining. Magentic shares each participant's tool transcript with
-    every other participant, but each agent owns a separate Responses
-    chain — under chaining the client strips the foreign
-    ``function_call`` yet still emits its ``function_result``, and
-    Azure 400s ("No tool call found for function call output"). With
-    store=False every call is a stateless full-item replay, where
-    call and output always travel together; the auto-injected
-    InMemoryHistoryProvider keeps full local history, so no context
-    is lost. Cost: full history re-sent per call (higher prompt
-    tokens; prompt caching softens it). The framework default is
-    store=True; we deviate for this reason. Verified against
-    installed agent-framework-openai 1.18.2: ``store is False``
-    makes ``_get_conversation_id`` return None.
+    No ``default_options`` override: the agents run on the framework
+    default, store=True (server-side Responses chaining). That is
+    safe here because the sequential orchestrator gives each agent
+    its own chain and passes only the previous agent's response
+    messages forward (chain_only_agent_responses=True) — a foreign
+    tool transcript enters a fresh chain as a matched call+result
+    pair on the first, stateless call, so it lands in that chain
+    intact and Azure never sees an orphan function_result. The old
+    store=False workaround (Nov 19) is gone: it re-sent the full
+    history on every call and burned ~4.5M prompt tokens for zero
+    PRs on the #10 run. With chaining, each call sends only new
+    content. There is no manager agent: sequential runs the four
+    roles in order, one pass, with the reviewer as the gate.
     """
     ponytail = load_ponytail()
-    no_store = {"store": False}
     planner = Agent(
         make_chat_client(config, config.planner_model),
         instructions=_PLANNER_INSTRUCTIONS,
         name="planner",
         tools=READ_TOOLS,
-        default_options=no_store,
     )
     builder = Agent(
         make_chat_client(config, config.builder_model),
         instructions=_BUILDER_INSTRUCTIONS,
         name="builder",
         tools=BUILD_TOOLS,
-        default_options=no_store,
     )
     reviewer = Agent(
         make_chat_client(config, config.reviewer_model),
         instructions=_REVIEWER_INSTRUCTIONS.format(ponytail=ponytail),
         name="reviewer",
         tools=REVIEW_TOOLS,
-        default_options=no_store,
     )
     merger = Agent(
         make_chat_client(config, config.merger_model),
         instructions=_MERGER_INSTRUCTIONS,
         name="merger",
         tools=MERGE_TOOLS,
-        default_options=no_store,
-    )
-    manager = Agent(
-        make_chat_client(config, config.manager_model),
-        instructions=_MANAGER_INSTRUCTIONS,
-        name="manager",
-        default_options=no_store,
     )
     return {
         "planner": planner,
         "builder": builder,
         "reviewer": reviewer,
         "merger": merger,
-        "manager": manager,
     }
 
 

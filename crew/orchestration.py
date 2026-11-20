@@ -1,20 +1,41 @@
-"""Magentic orchestration: planner -> builder -> reviewer -> merger,
-coordinated by a manager agent.
+"""Sequential orchestration: planner -> builder -> reviewer -> merger,
+one pass, each agent seeing only the previous agent's response.
 
 Wiring verified against the installed agent-framework 1.26.0 package:
-MagenticBuilder(participants=[...], manager_agent=<agent>,
-max_round_count=...) .build() returns a Workflow; `await workflow.run(task)`
-returns a WorkflowRunResult whose outputs come from get_outputs(). The
-manager is the plain manager agent: MagenticBuilder wraps it in a
-StandardMagenticManager with the round cap, and the ledger parses on
-the classic Azure OpenAI endpoint because the model returns real text
-there (proven live Nov 19 — the Foundry project endpoint returned
-hollow 200s, which is what broke the ledger). No format forcing, no
-manager subclass. Use manager_agent=, never manager=<plain agent>:
-the orchestrator reads manager.max_round_count, which a plain Agent
-lacks (AttributeError at build), and a custom manager= silently
-ignores the builder's max_round_count. The full loop is untested
-against the live endpoint.
+SequentialBuilder(participants=[...], chain_only_agent_responses=True)
+.build() returns a Workflow; `await workflow.run(task)` returns a
+WorkflowRunResult whose outputs come from get_outputs() (the last
+participant, the merger, by default).
+
+Why sequential, and why chain_only_agent_responses: Magentic shares
+the full chat history — including every participant's tool transcript
+— with every other participant, but each agent owns a separate
+Responses-API chain. Under chaining the client strips a foreign
+``function_call`` yet still emits its ``function_result``, and Azure
+400s ("No tool call found for function call output"). The Nov 19
+workaround was store=False on every agent (stateless full-history
+replay per call); it worked but burned ~4.5M prompt tokens for zero
+PRs on the #10 run and kept tripping 429s. Sequential with
+chain_only_agent_responses=True passes only the previous agent's
+response messages to the next agent (AgentExecutor context_mode
+"last_agent"), and each executor owns its own AgentSession, fresh
+per run. A foreign tool transcript therefore enters the next agent's
+chain as a matched call+result pair on its first, stateless call, so
+it lands in that chain intact — no orphan output, no 400 — and
+chaining (store=True, the framework default) is safe again, so each
+call sends only new content instead of the whole history.
+
+Single pass, by design (Nov 20): there is no manager and no
+replanning — the reviewer is a gate, and the merger merges only on
+an approved sign-off. If the reviewer requests changes, or no review
+is recorded at all, the run settles as stalled (see __main__.py) so
+a human re-queues the task with the notes addressed. A loop-back
+(reviewer -> builder) is the known next step if single-pass stalls
+too often; it is not built here. One consequence of chaining only
+agent responses: a downstream agent never sees the original task,
+only the previous agent's response — so each role's instructions
+tell it to carry the handoff (task, files, PR number, verdict) in
+its reply.
 """
 
 from __future__ import annotations
@@ -22,7 +43,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_framework import Workflow
-from agent_framework.orchestrations import MagenticBuilder
+from agent_framework.orchestrations import SequentialBuilder
 
 from .config import CrewConfig
 from .credit import should_stop, stop_reason
@@ -31,17 +52,16 @@ from .spend import spent_usd
 
 
 def build_workflow(config: CrewConfig) -> Workflow:
-    """Build the Magentic workflow for one crew run."""
+    """Build the sequential workflow for one crew run."""
     roles = build_roles(config)
-    return MagenticBuilder(
+    return SequentialBuilder(
         participants=[
             roles["planner"],
             roles["builder"],
             roles["reviewer"],
             roles["merger"],
         ],
-        manager_agent=roles["manager"],
-        max_round_count=config.max_rounds,
+        chain_only_agent_responses=True,
     ).build()
 
 

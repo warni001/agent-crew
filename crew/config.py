@@ -65,7 +65,9 @@ class CrewConfig:
     reviewer_model: str = "gpt-6-2-astra"
     builder_model: str = "gpt-6-2-sol"
     merger_model: str = "gpt-6-2-sol"
-    manager_model: str = "gpt-6-2-astra"
+    manager_model: str = "gpt-6-2-astra"  # Unused under sequential
+    # orchestration (there is no manager agent); retained so the env
+    # knob stays valid if a coordinating agent is added back.
     budget_limit_usd: float = 200.0
     # Manual starting offset: spend incurred before the tracker existed.
     # It only seeds the tracker at process start (crew/spend.py); the
@@ -78,14 +80,16 @@ class CrewConfig:
     # on the container app). Empty means the local file — the blob is
     # persistence, not a requirement.
     ledger_blob_url: str = ""
-    # Round cap for one Magentic run. The framework default is None
-    # (unlimited); we cap deliberately, and the reason is stall
-    # detection plus bounded burn: a stuck task must stop and be
-    # re-queued by a human instead of burning the whole $200 budget.
-    # 10 was an arbitrary scaffold default and too small: the first
-    # self-build hit it and terminated with zero PRs. 30 fits real
-    # tasks; the $190 credit guard and the Saturday deadline still
-    # cap total spend.
+    # Round cap for one Magentic run. Unused under sequential
+    # orchestration (there are no rounds, only one pass per agent);
+    # retained so CREW_MAX_ROUNDS stays a valid knob if a loop-back
+    # is added later. The framework default is None (unlimited); the
+    # cap existed for stall detection plus bounded burn: a stuck task
+    # must stop and be re-queued by a human instead of burning the
+    # whole $200 budget. 10 was an arbitrary scaffold default and too
+    # small: the first self-build hit it and terminated with zero PRs.
+    # 30 fits real tasks; the $190 credit guard and the Saturday
+    # deadline still cap total spend.
     max_rounds: int = 30
 
     @property

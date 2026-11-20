@@ -66,3 +66,28 @@ def test_empty_summary_rejected(feedback_mod):
 def test_empty_task_id_rejected(feedback_mod):
     with pytest.raises(ValueError):
         feedback_mod.done_issue_payload("", "Done.")
+
+
+def test_stalled_payload_review_reason(feedback_mod):
+    payload = feedback_mod.stalled_issue_payload(
+        "Fix X", "Reviewer requested changes:\nPR #7: fix the test",
+        reason="review",
+    )
+    assert payload["title"] == "[crew] Stalled: Fix X"
+    assert "not done" in payload["body"]
+    assert "requested changes" in payload["body"]
+    assert "round/reset cap" not in payload["body"]
+
+
+def test_stalled_payload_no_review_reason(feedback_mod):
+    payload = feedback_mod.stalled_issue_payload(
+        "Fix X", "merged nothing", reason="no_review"
+    )
+    assert "not done" in payload["body"]
+    assert "No PR was opened" in payload["body"]
+    assert "round/reset cap" not in payload["body"]
+
+
+def test_stalled_payload_defaults_to_cap(feedback_mod):
+    payload = feedback_mod.stalled_issue_payload("Fix X", "hit the cap")
+    assert "round/reset cap" in payload["body"]

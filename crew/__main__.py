@@ -5,10 +5,11 @@ no argument, runs the default self-build task first, then polls GitHub
 issues labelled `crew-task` for the next task, sleeping POLL_SECONDS
 between polls, until the credit/deadline stop rule fires. The loop
 never re-runs a task the ledger or a "[crew] Done:" issue says is
-finished, failed, or stalled — a stalled task hit the round cap and
-is not retried automatically; open a new issue to re-queue it.
+finished, failed, or stalled — a stalled task hit the review gate
+or produced nothing shippable and is not retried automatically;
+open a new issue to re-queue it.
 
-Loads config from env, validates it, builds the Magentic workflow, runs
+Loads config from env, validates it, builds the sequential workflow, runs
 one task, records the run in the ledger, and posts a "done" issue update.
 A failed feedback post warns on stderr but does not fail the run.
 """
@@ -49,17 +50,16 @@ def setup_logging() -> None:
     # httpx back at INFO (Nov 19): one line per model request is the
     # only sign of life a running task leaves in the logs — the crew
     # went silent for hours and nobody could tell if it was working.
-    # Noisy by design; the Magentic progress-ledger warnings stay at
-    # WARNING on purpose.
+    # Noisy by design; the framework warnings stay at WARNING on purpose.
     logging.getLogger("httpx").setLevel(logging.INFO)
 
 
 def _settled_task_texts(ledger: Ledger) -> set[str]:
     """Task strings the ledger says are finished, failed, or stalled.
 
-    Stalled counts as settled for the auto-loop: re-running a capped
-    task immediately would just burn another 30 rounds on the same
-    stall. A human re-queues it with a refined issue instead.
+    Stalled counts as settled for the auto-loop: re-running a stalled
+    task immediately would just burn another run on the same stall. A
+    human re-queues it with a refined issue instead.
     """
     return {
         str(e.get("task", ""))
@@ -69,22 +69,25 @@ def _settled_task_texts(ledger: Ledger) -> set[str]:
     }
 
 
-def _limit_hit(outputs: list[object]) -> str | None:
-    """Which Magentic limit a run hit ("round"/"reset"), or None.
+def _sign_offs_since(config: CrewConfig, before: int) -> list[dict] | None:
+    """Reviewer sign-offs recorded since `before` (a count snapshot).
 
-    The framework yields a completion message, not an exception, when
-    a limit is hit: "Workflow terminated due to reaching maximum
-    {round|reset} count." (agent_framework_orchestrations._magentic
-    _check_within_limits_or_complete). Match on that exact string —
-    it is the only signal the outputs carry.
+    Reads the local sign-off ledger (config.ledger_path) — the same
+    file record_sign_off writes to. That is deliberately NOT the loop
+    ledger: in production the loop ledger is the blob, while sign-offs
+    land in the local file. Returns None when the ledger cannot be
+    read at all, so the caller fails open with a warning instead of
+    stalling every run on a ledger failure. (Known divergence: the
+    sign-off record and the loop ledger are two files; unifying them
+    is a separate change.)
     """
-    for output in outputs:
-        text = str(output)
-        if "reaching maximum round count" in text:
-            return "round"
-        if "reaching maximum reset count" in text:
-            return "reset"
-    return None
+    try:
+        return Ledger(config.ledger_path).sign_offs()[before:]
+    except Exception as exc:  # noqa: BLE001 - ledger must not kill a run
+        logging.getLogger("crew").warning(
+            "could not read sign-off ledger: %s", exc
+        )
+        return None
 
 
 def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
@@ -143,9 +146,23 @@ def _record_spend(ledger: Ledger) -> None:
 
 
 def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
-    """Run a single task through the crew. Returns the exit code."""
+    """Run a single task through the crew. Returns the exit code.
+
+    The reviewer is the gate: after the workflow finishes, the run
+    settles as stalled — not finished — when the reviewer requested
+    changes, or when no review was recorded at all (no PR opened, or
+    the reviewer never ran, so nothing shipped). A run that records
+    task_finished with zero PRs is the Nov 19 hollow-done mistake;
+    the gate exists to stop it repeating. An approved sign-off is
+    what lets a run finish.
+    """
     log = logging.getLogger("crew")
     _record(ledger, "task_started", task=task, repo=config.repo)
+    try:
+        before = len(Ledger(config.ledger_path).sign_offs())
+    except Exception as exc:  # noqa: BLE001 - ledger must not kill a run
+        log.warning("could not read sign-off ledger: %s", exc)
+        before = None
     try:
         workflow = build_workflow(config)
         outputs = asyncio.run(run_task(workflow, task, config))
@@ -155,21 +172,41 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
         return 1
 
     summary = "\n\n".join(str(o) for o in outputs) or "(no output)"
-    limit = _limit_hit(outputs)
-    if limit is not None:
-        # A cap termination is not a finish: the first self-build run
-        # hit the round cap, recorded task_finished, and posted a Done
-        # issue with zero PRs. Record it stalled and post a Stalled
-        # issue instead, so nobody mistakes it for done — and the loop
-        # does not spin on it (task_stalled is in the settled set).
-        _record(ledger, "task_stalled", task=task, limit=limit)
-        log.warning("task stalled (max %s count):\n%s", limit, summary)
-        try:
-            url = report_stalled(config.repo, task, summary)
-            log.info("stalled issue posted: %s", url)
-        except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
-            print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
-        return 1
+    if before is not None:
+        sign_offs = _sign_offs_since(config, before)
+        if sign_offs is not None:
+            requested = [
+                s for s in sign_offs if s.get("verdict") == "changes_requested"
+            ]
+            if requested:
+                notes = "\n".join(
+                    f"PR #{s.get('pr_number')}: {s.get('notes', '')}"
+                    for s in requested
+                )
+                _record(ledger, "task_stalled", task=task, reason="review")
+                log.warning(
+                    "task stalled (reviewer requested changes):\n%s", notes
+                )
+                try:
+                    url = report_stalled(
+                        config.repo,
+                        task,
+                        f"Reviewer requested changes:\n{notes}\n\n{summary}",
+                        reason="review",
+                    )
+                    log.info("stalled issue posted: %s", url)
+                except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+                    print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+                return 1
+            if not sign_offs:
+                _record(ledger, "task_stalled", task=task, reason="no_review")
+                log.warning("task stalled (no review recorded):\n%s", summary)
+                try:
+                    url = report_stalled(config.repo, task, summary, reason="no_review")
+                    log.info("stalled issue posted: %s", url)
+                except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+                    print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+                return 1
     _record(ledger, "task_finished", task=task, outputs=outputs)
     log.info("task finished:\n%s", summary)
     try:

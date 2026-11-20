@@ -7,12 +7,12 @@ not from memory or training data. What inspection established:
 - Top level has ``Agent`` — there is NO ``ChatAgent`` in 1.26.0
   (the class was renamed). ``Agent(client, instructions=None, *, ...)``
   takes the chat client as its FIRST positional argument.
-- There is NO ``agent_framework.magentic`` module. Magentic lives in
-  ``agent_framework.orchestrations``:
-  ``MagenticOrchestrator(manager, participant_registry, *,
-  require_plan_signoff=False)``, ``MagenticBuilder`` with
-  ``.build()`` / ``.with_checkpointing()`` / ``.with_plan_review()``,
-  ``StandardMagenticManager``.
+- There is NO ``agent_framework.magentic`` module. Sequential and
+  Magentic both live in ``agent_framework.orchestrations``; the crew
+  uses ``SequentialBuilder`` with ``chain_only_agent_responses=True``
+  (``AgentExecutor`` context_mode ``"last_agent"``) — Magentic is
+  out, since sharing full history across agents' Responses chains
+  400s on foreign tool results.
 - The chat client is ``agent_framework_openai.OpenAIChatClient``
   (companion package ``agent-framework-openai`` 1.18.2), Azure
   overload keyword-only args: ``OpenAIChatClient(*, model=None,
@@ -74,28 +74,26 @@ def test_no_magentic_top_level_module():
     assert importlib.util.find_spec("agent_framework.magentic") is None
 
 
-def test_magentic_lives_in_orchestrations():
+def test_sequential_lives_in_orchestrations():
     _real_sdk()
     orch = importlib.import_module("agent_framework.orchestrations")
-    for name in (
-        "MagenticOrchestrator",
-        "MagenticBuilder",
-        "StandardMagenticManager",
-        "MagenticManagerBase",
-    ):
-        assert hasattr(orch, name), f"missing in orchestrations: {name}"
-    sig = inspect.signature(orch.MagenticOrchestrator.__init__)
-    params = list(sig.parameters.values())
-    assert params[1].name == "manager"
-    assert params[2].name == "participant_registry"
-    assert "require_plan_signoff" in sig.parameters
+    assert hasattr(orch, "SequentialBuilder"), "missing in orchestrations: SequentialBuilder"
+    sig = inspect.signature(orch.SequentialBuilder.__init__)
+    assert "chain_only_agent_responses" in sig.parameters
+    assert sig.parameters["chain_only_agent_responses"].default is False
+    assert "participants" in sig.parameters
+    assert callable(getattr(orch.SequentialBuilder, "build"))
 
 
-def test_magentic_builder_methods():
+def test_agent_executor_last_agent_context_mode():
+    """AgentExecutor's context_mode accepts "last_agent": only the
+    latest agent response is passed as context — the mode
+    chain_only_agent_responses=True selects."""
     _real_sdk()
-    orch = importlib.import_module("agent_framework.orchestrations")
-    for method in ("build", "with_checkpointing", "with_plan_review"):
-        assert callable(getattr(orch.MagenticBuilder, method)), method
+    from agent_framework._workflows._agent_executor import AgentExecutor
+
+    sig = inspect.signature(AgentExecutor.__init__)
+    assert "context_mode" in sig.parameters
 
 
 def test_openai_chat_client_azure_signature():

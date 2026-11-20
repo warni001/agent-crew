@@ -160,21 +160,44 @@ def report_done(repo: str, task: str, summary: str, pr_url: str = "") -> str:
     return open_issue(repo, payload["title"], payload["body"])
 
 
-def stalled_issue_payload(task: str, summary: str) -> dict:
-    """Pure payload for a "stalled" issue: title, body, labels. No gh call."""
+def stalled_issue_payload(task: str, summary: str, reason: str = "cap") -> dict:
+    """Pure payload for a "stalled" issue: title, body, labels. No gh call.
+
+    reason names why the run stalled: "cap" (the old Magentic
+    round/reset cap — kept for callers that still pass it), "review"
+    (the reviewer requested changes; the summary carries the review
+    notes), or "no_review" (no PR was opened and no review recorded,
+    so nothing shipped). The body always says the task is not done.
+    """
     if not task:
         raise ValueError("task must not be empty")
     if not summary:
         raise ValueError("summary must not be empty")
+    if reason == "review":
+        why = (
+            "The reviewer requested changes, so this task is not done "
+            "and is not retried automatically. Re-queue it with a new "
+            "crew-task issue once the review notes below are addressed."
+        )
+    elif reason == "no_review":
+        why = (
+            "No PR was opened and no review was recorded, so nothing "
+            "shipped and this task is not done. It is not retried "
+            "automatically. Re-queue it with a refined crew-task issue."
+        )
+    else:
+        why = (
+            "The run hit the round/reset cap before finishing, so this task "
+            "is not done and is not retried automatically. Re-queue it with "
+            "a refined crew-task issue (narrower scope, or a higher "
+            "CREW_MAX_ROUNDS)."
+        )
     lines = [
         f"Task stalled: {task}",
         "",
         summary,
         "",
-        "The run hit the round/reset cap before finishing, so this task "
-        "is not done and is not retried automatically. Re-queue it with "
-        "a refined crew-task issue (narrower scope, or a higher "
-        "CREW_MAX_ROUNDS).",
+        why,
     ]
     return {
         "title": f"[crew] Stalled: {task}",
@@ -183,9 +206,9 @@ def stalled_issue_payload(task: str, summary: str) -> dict:
     }
 
 
-def report_stalled(repo: str, task: str, summary: str) -> str:
-    """Post a "stalled" issue update when a task hits the round cap."""
-    payload = stalled_issue_payload(task, summary)
+def report_stalled(repo: str, task: str, summary: str, reason: str = "cap") -> str:
+    """Post a "stalled" issue update when a task stalls (cap or review)."""
+    payload = stalled_issue_payload(task, summary, reason=reason)
     return open_issue(repo, payload["title"], payload["body"])
 
 
