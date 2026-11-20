@@ -91,3 +91,99 @@ def test_stalled_payload_no_review_reason(feedback_mod):
 def test_stalled_payload_defaults_to_cap(feedback_mod):
     payload = feedback_mod.stalled_issue_payload("Fix X", "hit the cap")
     assert "round/reset cap" in payload["body"]
+
+
+# --- stall marking on the original issue (comment + stalled label) ---
+
+
+def _ok_proc(monkeypatch, feedback_mod, calls):
+    """Mock subprocess.run: record argv, succeed with empty output."""
+    from unittest import mock
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(feedback_mod.subprocess, "run", fake_run)
+
+
+def test_comment_on_task_issue_posts_via_gh(feedback_mod, monkeypatch):
+    calls = []
+    _ok_proc(monkeypatch, feedback_mod, calls)
+    url = feedback_mod.comment_on_task_issue(
+        "warni001/agent-crew", 42, "Stalled: no_review\n\nnothing shipped"
+    )
+    assert url == ""
+    assert calls == [
+        ["gh", "issue", "comment", "42", "--body",
+         "Stalled: no_review\n\nnothing shipped",
+         "--repo", "warni001/agent-crew"]
+    ]
+
+
+def test_comment_on_task_issue_rejects_other_repos(feedback_mod):
+    with pytest.raises(ValueError):
+        feedback_mod.comment_on_task_issue("someone-else/other-repo", 1, "x")
+
+
+def test_ensure_label_creates_with_force(feedback_mod, monkeypatch):
+    calls = []
+    _ok_proc(monkeypatch, feedback_mod, calls)
+    feedback_mod.ensure_label(
+        "warni001/agent-crew", "stalled", "Task stalled", "d73a4a"
+    )
+    assert calls == [
+        ["gh", "label", "create", "stalled", "--description", "Task stalled",
+         "--color", "d73a4a", "--force", "--repo", "warni001/agent-crew"]
+    ]
+
+
+def test_ensure_label_rejects_other_repos(feedback_mod):
+    with pytest.raises(ValueError):
+        feedback_mod.ensure_label("someone-else/other-repo", "x", "y", "z")
+
+
+def test_tag_task_stalled_ensures_label_then_adds_it(feedback_mod, monkeypatch):
+    calls = []
+    _ok_proc(monkeypatch, feedback_mod, calls)
+    feedback_mod.tag_task_stalled("warni001/agent-crew", 42)
+    assert calls == [
+        ["gh", "label", "create", "stalled", "--description",
+         feedback_mod.STALLED_LABEL_DESCRIPTION,
+         "--color", "d73a4a", "--force", "--repo", "warni001/agent-crew"],
+        ["gh", "issue", "edit", "42", "--add-label", "stalled",
+         "--repo", "warni001/agent-crew"],
+    ]
+
+
+def test_tag_task_stalled_tolerates_label_failure(feedback_mod, monkeypatch):
+    from unittest import mock
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if "label" in argv:
+            return mock.Mock(returncode=1, stdout="", stderr="boom")
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(feedback_mod.subprocess, "run", fake_run)
+    # No raise: a labeling failure must never fail settlement.
+    feedback_mod.tag_task_stalled("warni001/agent-crew", 42)
+    assert len(calls) == 1  # label create only; the edit is skipped
+
+
+def test_tag_task_stalled_tolerates_edit_failure(feedback_mod, monkeypatch):
+    from unittest import mock
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if "edit" in argv:
+            return mock.Mock(returncode=1, stdout="", stderr="boom")
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(feedback_mod.subprocess, "run", fake_run)
+    feedback_mod.tag_task_stalled("warni001/agent-crew", 42)
+    assert len(calls) == 2  # label create + edit attempted, no raise

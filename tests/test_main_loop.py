@@ -351,3 +351,140 @@ def test_main_explicit_task_runs_once(main_mod, ledger_mod, tmp_path, monkeypatc
     assert main_mod.main(["do the thing"]) == 0
     run_task.assert_awaited_once()
     assert run_task.await_args.args[1] == "do the thing"
+
+
+# --- stalled runs comment on the original issue and tag it stalled ---
+
+
+def _stall_mocks(main_mod, monkeypatch):
+    """Mock the three feedback calls a stall makes; return them."""
+    stalled = mock.Mock(return_value="https://example/stalled")
+    comment = mock.Mock(return_value="https://example/comment")
+    tag = mock.Mock()
+    monkeypatch.setattr(main_mod, "report_stalled", stalled)
+    monkeypatch.setattr(main_mod, "comment_on_task_issue", comment)
+    monkeypatch.setattr(main_mod, "tag_task_stalled", tag)
+    monkeypatch.setattr(main_mod, "report_done", mock.Mock())
+    return stalled, comment, tag
+
+
+def test_stalled_run_comments_and_tags_original_issue(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """No review recorded: the stall comments on the ORIGINAL issue
+    number (not a new issue) with the run summary, and tags it
+    stalled — in addition to the separate stalled issue."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
+    stalled, comment, tag = _stall_mocks(main_mod, monkeypatch)
+    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=42) == 1
+    stalled.assert_called_once()
+    comment.assert_called_once()
+    assert comment.call_args.args[0] == "warni001/agent-crew"
+    assert comment.call_args.args[1] == 42
+    assert comment.call_args.args[2].startswith("Stalled: no_review")
+    tag.assert_called_once_with("warni001/agent-crew", 42)
+    main_mod.report_done.assert_not_called()
+
+
+def test_review_stalled_run_comments_with_review_reason(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(
+        main_mod, "run_task",
+        _run_task_recording_sign_off(
+            ledger_mod, path, ["merged nothing"], verdict="changes_requested",
+            pr_number=7, notes="fix the test",
+        ),
+    )
+    stalled, comment, tag = _stall_mocks(main_mod, monkeypatch)
+    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=7) == 1
+    comment.assert_called_once()
+    assert comment.call_args.args[1] == 7
+    assert comment.call_args.args[2].startswith("Stalled: review")
+    assert "fix the test" in comment.call_args.args[2]
+    tag.assert_called_once_with("warni001/agent-crew", 7)
+
+
+def test_stalled_run_without_issue_number_skips_marking(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """A one-shot run has no original issue: stall posts the stalled
+    issue and nothing else."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
+    stalled, comment, tag = _stall_mocks(main_mod, monkeypatch)
+    assert main_mod.run_one_task(config, ledger, "do the thing") == 1
+    stalled.assert_called_once()
+    comment.assert_not_called()
+    tag.assert_not_called()
+
+
+def test_finished_run_does_not_comment_or_tag(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """The done path is unchanged: it posts the Done issue and never
+    comments on or tags the original issue."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(
+        main_mod, "run_task",
+        _run_task_recording_sign_off(ledger_mod, path, ["merged PR #1"]),
+    )
+    done = mock.Mock(return_value="https://example/1")
+    monkeypatch.setattr(main_mod, "report_done", done)
+    comment = mock.Mock()
+    tag = mock.Mock()
+    monkeypatch.setattr(main_mod, "comment_on_task_issue", comment)
+    monkeypatch.setattr(main_mod, "tag_task_stalled", tag)
+    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=42) == 0
+    done.assert_called_once()
+    comment.assert_not_called()
+    tag.assert_not_called()
+
+
+def test_stall_tolerates_comment_and_label_failure(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """A comment or label failure must not fail settlement: the run
+    still settles stalled and exits 1."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
+    stalled = mock.Mock(return_value="https://example/stalled")
+    monkeypatch.setattr(main_mod, "report_stalled", stalled)
+    monkeypatch.setattr(
+        main_mod, "comment_on_task_issue",
+        mock.Mock(side_effect=RuntimeError("gh down")),
+    )
+    monkeypatch.setattr(
+        main_mod, "tag_task_stalled",
+        mock.Mock(side_effect=RuntimeError("gh down")),
+    )
+    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=42) == 1
+    stalled.assert_called_once()
+    task_events = [e for e in ledger.entries() if e["event"].startswith("task_")]
+    assert [e["event"] for e in task_events] == ["task_started", "task_stalled"]
+
+
+def test_next_task_issue_returns_number(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    config = make_config(config_mod)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    ledger.record("task_finished", task=main_mod.DEFAULT_TASK)
+    queued = [issue(1, "Old job"), issue(2, "New job")]
+    monkeypatch.setattr(main_mod, "list_done_tasks", lambda repo: set())
+    monkeypatch.setattr(main_mod, "list_task_issues", lambda repo: queued)
+    picked = main_mod.next_task_issue(config, ledger)
+    assert picked == {"task": "Old job", "number": 1}
+
+
+def test_next_task_issue_default_task_has_no_number(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    config = make_config(config_mod)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    monkeypatch.setattr(main_mod, "list_done_tasks", lambda repo: set())
+    picked = main_mod.next_task_issue(config, ledger)
+    assert picked == {"task": main_mod.DEFAULT_TASK, "number": None}

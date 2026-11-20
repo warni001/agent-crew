@@ -25,7 +25,14 @@ import time
 
 from .config import CrewConfig
 from .credit import stop_reason
-from .feedback import list_done_tasks, list_task_issues, report_done, report_stalled
+from .feedback import (
+    comment_on_task_issue,
+    list_done_tasks,
+    list_task_issues,
+    report_done,
+    report_stalled,
+    tag_task_stalled,
+)
 from .blob_ledger import build_ledger
 from .ledger import Ledger
 from .orchestration import build_workflow, format_run_summary, run_task
@@ -90,6 +97,35 @@ def _sign_offs_since(config: CrewConfig, before: int) -> list[dict] | None:
         return None
 
 
+def next_task_issue(config: CrewConfig, ledger: Ledger) -> dict | None:
+    """Pick the next task, with its issue number — or None when there
+    is nothing to do.
+
+    Returns {"task": str, "number": int | None}: the number is the
+    original `crew-task` issue, None for the default task, which has
+    no issue. The loop needs the number so a stalled run can comment
+    on the original issue itself. Picking and skipping are exactly
+    next_task's; this only also returns the number.
+    """
+    log = logging.getLogger("crew")
+    done = _settled_task_texts(ledger)
+    try:
+        done |= list_done_tasks(config.repo)
+    except Exception as exc:  # noqa: BLE001 - a poll failure is not fatal
+        log.warning("could not list done issues: %s", exc)
+    if DEFAULT_TASK not in done:
+        return {"task": DEFAULT_TASK, "number": None}
+    try:
+        issues = list_task_issues(config.repo)
+    except Exception as exc:  # noqa: BLE001 - a poll failure is not fatal
+        log.warning("could not list task issues: %s", exc)
+        return None
+    for issue in issues:
+        if issue["task"] not in done:
+            return {"task": issue["task"], "number": issue["number"]}
+    return None
+
+
 def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
     """Pick the next task, or None when there is nothing to do.
 
@@ -99,23 +135,8 @@ def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
     issue. A GitHub failure warns and returns None (sleep and retry)
     instead of crashing the loop.
     """
-    log = logging.getLogger("crew")
-    done = _settled_task_texts(ledger)
-    try:
-        done |= list_done_tasks(config.repo)
-    except Exception as exc:  # noqa: BLE001 - a poll failure is not fatal
-        log.warning("could not list done issues: %s", exc)
-    if DEFAULT_TASK not in done:
-        return DEFAULT_TASK
-    try:
-        issues = list_task_issues(config.repo)
-    except Exception as exc:  # noqa: BLE001 - a poll failure is not fatal
-        log.warning("could not list task issues: %s", exc)
-        return None
-    for issue in issues:
-        if issue["task"] not in done:
-            return issue["task"]
-    return None
+    picked = next_task_issue(config, ledger)
+    return picked["task"] if picked else None
 
 
 def _record(ledger: Ledger, event: str, **fields: object) -> None:
@@ -145,7 +166,42 @@ def _record_spend(ledger: Ledger) -> None:
     )
 
 
-def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
+def _mark_task_stalled(
+    config: CrewConfig, issue_number: int | None, reason: str, summary: str
+) -> None:
+    """Comment on the original task issue and tag it stalled.
+
+    The separate "[crew] Stalled:" issue is already posted; this puts
+    the status on the original issue itself, so the stall is visible
+    where the task lives. Best-effort: neither call may fail the run —
+    a comment failure warns and the tag is still attempted, and a tag
+    failure warns too. Nothing happens when there is no issue number
+    (the default task, or a one-shot run).
+    """
+    if issue_number is None:
+        return
+    log = logging.getLogger("crew")
+    body = f"Stalled: {reason}\n\n{summary}"
+    try:
+        comment_on_task_issue(config.repo, issue_number, body)
+        log.info("stalled comment posted on issue #%s", issue_number)
+    except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+        print(
+            f"warning: could not comment on task issue #{issue_number}: {exc}",
+            file=sys.stderr,
+        )
+    try:
+        tag_task_stalled(config.repo, issue_number)
+    except Exception as exc:  # noqa: BLE001 - tag_task_stalled never raises
+        print(
+            f"warning: could not tag task issue #{issue_number}: {exc}",
+            file=sys.stderr,
+        )
+
+
+def run_one_task(
+    config: CrewConfig, ledger: Ledger, task: str, issue_number: int | None = None
+) -> int:
     """Run a single task through the crew. Returns the exit code.
 
     The reviewer is the gate: after the workflow finishes, the run
@@ -154,7 +210,9 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
     the reviewer never ran, so nothing shipped). A run that records
     task_finished with zero PRs is the Nov 19 hollow-done mistake;
     the gate exists to stop it repeating. An approved sign-off is
-    what lets a run finish.
+    what lets a run finish. `issue_number` is the original task
+    issue, when the task came from one: a stalled run comments on it
+    and tags it stalled, in addition to posting the stalled issue.
     """
     log = logging.getLogger("crew")
     _record(ledger, "task_started", task=task, repo=config.repo)
@@ -190,6 +248,7 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
                 log.info("stalled issue posted: %s", url)
             except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
                 print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+            _mark_task_stalled(config, issue_number, "review", summary)
             return 1
         if not sign_offs:
             _record(ledger, "task_stalled", task=task, reason="no_review")
@@ -199,6 +258,7 @@ def run_one_task(config: CrewConfig, ledger: Ledger, task: str) -> int:
                 log.info("stalled issue posted: %s", url)
             except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
                 print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+            _mark_task_stalled(config, issue_number, "no_review", summary)
             return 1
     _record(ledger, "task_finished", task=task, outputs=outputs)
     log.info("task finished:\n%s", summary)
@@ -264,13 +324,13 @@ def main(argv: list[str] | None = None) -> int:
         if reason:
             log.info("stopping: %s", reason)
             return 0
-        task = next_task(config, ledger)
-        if task is None:
+        picked = next_task_issue(config, ledger)
+        if picked is None:
             log.info("no task queued, sleeping %ss", interval)
             time.sleep(interval)
             continue
-        log.info("picked up task: %s", task[:120])
-        run_one_task(config, ledger, task)
+        log.info("picked up task: %s", picked["task"][:120])
+        run_one_task(config, ledger, picked["task"], issue_number=picked["number"])
         _record_spend(ledger)
         time.sleep(interval)
 

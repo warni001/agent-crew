@@ -8,6 +8,7 @@ waiting for an answer. When a task finishes, `report_done` posts a
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 
 from .config import ALLOWED_REPO
@@ -15,6 +16,13 @@ from .tools import _check_repo, _run
 
 # Label an issue carries when it is a task for the crew to pick up.
 TASK_LABEL = "crew-task"
+
+# Label a stalled task issue carries, so its status shows on the
+# original issue itself instead of only in a separate "[crew]
+# Stalled:" issue. GitHub's red.
+STALLED_LABEL = "stalled"
+STALLED_LABEL_DESCRIPTION = "Task stalled; see the crew's comment for the reason"
+STALLED_LABEL_COLOR = "d73a4a"
 
 # Prefix of the title of a "done" issue posted by report_done().
 DONE_TITLE_PREFIX = "[crew] Done: "
@@ -60,6 +68,74 @@ def _gh_json(repo: str, args: list[str]) -> list[dict]:
     if not isinstance(parsed, list):
         raise RuntimeError("gh output was not a JSON list")
     return parsed
+
+
+def _gh(repo: str, args: list[str]) -> str:
+    """Run `gh` and return its stdout, stripped.
+
+    Raises RuntimeError on a non-zero exit. Direct subprocess (not
+    tools._run): comment bodies carry the full run summary and can
+    exceed _run's output cap.
+    """
+    proc = subprocess.run(
+        ["gh", *args, "--repo", repo],
+        capture_output=True, text=True, timeout=60,
+    )
+    out = (proc.stdout + proc.stderr).strip()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"gh {' '.join(args[:2])} failed (exit {proc.returncode}): "
+            f"{out[:500]}"
+        )
+    return proc.stdout.strip()
+
+
+def comment_on_task_issue(repo: str, issue_number: int, body: str) -> str:
+    """Comment on a task issue. Returns the comment URL.
+
+    Direct subprocess, not tools._run: the body is the full run
+    summary and can exceed _run's output cap.
+    """
+    _check_repo(repo)
+    return _gh(
+        repo,
+        ["issue", "comment", str(issue_number), "--body", body],
+    )
+
+
+def ensure_label(repo: str, label: str, description: str, color: str) -> None:
+    """Create a label, or update it when it already exists (`--force`).
+
+    Raises on a gh failure; the caller decides whether that is fatal.
+    """
+    _check_repo(repo)
+    _gh(
+        repo,
+        ["label", "create", label, "--description", description,
+         "--color", color, "--force"],
+    )
+
+
+def tag_task_stalled(repo: str, issue_number: int) -> None:
+    """Tag a task issue `stalled`. Best-effort: never raises.
+
+    Settlement must never fail because labeling did, and the comment
+    on the issue is the important part — a labeling failure warns
+    and the run goes on without the tag.
+    """
+    log = logging.getLogger("crew.feedback")
+    try:
+        ensure_label(
+            repo, STALLED_LABEL, STALLED_LABEL_DESCRIPTION, STALLED_LABEL_COLOR
+        )
+    except Exception as exc:  # noqa: BLE001 - labeling is best-effort
+        log.warning("could not ensure stalled label: %s", exc)
+        return
+    try:
+        _gh(repo, ["issue", "edit", str(issue_number),
+                   "--add-label", STALLED_LABEL])
+    except Exception as exc:  # noqa: BLE001 - labeling is best-effort
+        log.warning("could not tag issue #%s stalled: %s", issue_number, exc)
 
 
 def list_task_issues(repo: str) -> list[dict]:
@@ -213,9 +289,11 @@ def report_stalled(repo: str, task: str, summary: str, reason: str = "cap") -> s
 
 
 __all__ = [
-    "open_issue", "comment_issue", "ask_question", "report_done",
+    "open_issue", "comment_issue", "comment_on_task_issue", "ensure_label",
+    "tag_task_stalled", "ask_question", "report_done",
     "report_stalled", "done_issue_payload", "stalled_issue_payload",
     "task_text", "list_task_issues",
-    "list_done_tasks", "TASK_LABEL", "DONE_TITLE_PREFIX",
-    "STALLED_TITLE_PREFIX",
+    "list_done_tasks", "TASK_LABEL", "STALLED_LABEL",
+    "STALLED_LABEL_DESCRIPTION", "STALLED_LABEL_COLOR",
+    "DONE_TITLE_PREFIX", "STALLED_TITLE_PREFIX",
 ]
