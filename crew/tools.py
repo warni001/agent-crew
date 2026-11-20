@@ -26,7 +26,12 @@ from agent_framework import tool
 
 from .config import ALLOWED_REPO
 
-_MAX_OUTPUT = 4000
+# Default cap for a command's combined output: ~20KB, about 5k tokens.
+# 4000 was far too small — a failing pytest run or a long listing
+# was cut before the useful part, and file reads broke entirely.
+# Commands whose full output is the point (file reads) pass a
+# larger cap explicitly; this default only bounds the rest.
+_MAX_OUTPUT = 20_000
 _SHELL_FORBIDDEN = (";", "&&", "||", "|", ">", "<", "`", "$(")
 # Builder needs git, tests, and read-only inspection — nothing else.
 _SHELL_ALLOWED_PREFIXES = (
