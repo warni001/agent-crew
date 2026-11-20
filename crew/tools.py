@@ -265,6 +265,7 @@ def run_shell(command: str) -> str:
 READ_TOOLS = [tool(f) for f in (read_repo_file, read_file)]
 BUILD_TOOLS = [tool(f) for f in (
     read_repo_file, read_file, write_file, run_pytest, run_shell,
+    open_pr,
 )]
 REVIEW_TOOLS = [tool(f) for f in (
     read_repo_file, read_file, comment_on_pr, record_sign_off,

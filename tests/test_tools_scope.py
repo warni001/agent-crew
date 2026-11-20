@@ -47,6 +47,17 @@ def test_no_agent_toolset_has_check_credit(tools_mod):
     assert not hasattr(tools_mod, "check_credit")
 
 
+def test_builder_can_open_prs(tools_mod):
+    """The builder must be able to open PRs for the branches it pushes:
+    the Round 4 run pushed three branches but opened no PRs because
+    open_pr was not in its tool list, even though its instructions
+    told it to open the PR with open_pr. open_pr takes the branch as
+    `head`, so it works for pre-existing branches as well as ones the
+    run itself created."""
+    tools = [t.name for t in tools_mod.BUILD_TOOLS]
+    assert "open_pr" in tools
+
+
 def test_ghcr_image_constant(tools_mod):
     assert tools_mod.GHCR_IMAGE == "ghcr.io/warni001/agent-crew"
 
