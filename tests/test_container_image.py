@@ -53,6 +53,37 @@ def test_ci_runs_pytest_as_a_module() -> None:
     assert "run: pytest\n" not in ci
 
 
+def test_entrypoint_strips_ci_extraheader() -> None:
+    # The image build copies .git/ from a CI checkout, and
+    # actions/checkout writes the workflow's GITHUB_TOKEN into
+    # .git/config as http.extraheader. Git sends that header on every
+    # request and never consults the credential helper, so the crew's
+    # fine-grained PAT never gets used and every git operation fails
+    # with the dead CI token. The entrypoint must strip it before the
+    # crew runs, at both local and global scope, tolerating a missing
+    # key (set -e would kill the entrypoint otherwise).
+    entrypoint = _read("entrypoint.sh")
+    assert "http.https://github.com/.extraheader" in entrypoint
+    assert "--unset-all" in entrypoint
+    assert "|| true" in entrypoint
+
+
+def test_image_checkout_does_not_persist_credentials() -> None:
+    # Same trap at the source: the default checkout persists the
+    # workflow token into .git/config, and the Docker build copies
+    # .git/ into the image. Every checkout in the image workflow must
+    # opt out, so the image never carries a CI token.
+    workflow = _read(".github/workflows/crew-image.yml")
+    checkouts = workflow.count("actions/checkout@v4")
+    opt_outs = sum(
+        1
+        for line in workflow.splitlines()
+        if line.strip().startswith("persist-credentials: false")
+    )
+    assert checkouts >= 1
+    assert opt_outs == checkouts
+
+
 def test_image_workflow_never_uses_latest() -> None:
     # `:latest` is not pushed and not smoke-tested: a `:latest` pull
     # can resolve to a stale cached manifest, so the smoke test could

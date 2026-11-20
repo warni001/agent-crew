@@ -17,6 +17,15 @@
 set -e
 
 if [ "$1" = "python" ] && [ "$2" = "-m" ] && [ "$3" = "crew" ]; then
+    # The image build copies .git/ from a CI checkout, and
+    # actions/checkout writes the workflow's short-lived GITHUB_TOKEN
+    # into .git/config as http.extraheader. Git sends that header on
+    # every request and never consults the credential helper, so the
+    # crew's fine-grained PAT never gets used and every git operation
+    # fails with the dead CI token. Strip it so git falls through to
+    # the gh helper below. `|| true`: the key may not exist.
+    git -C /app config --unset-all http.https://github.com/.extraheader || true
+    git config --global --unset-all http.https://github.com/.extraheader || true
     if gh auth status >/dev/null 2>&1; then
         gh auth setup-git
     fi
