@@ -126,6 +126,31 @@ def test_comment_on_task_issue_rejects_other_repos(feedback_mod):
         feedback_mod.comment_on_task_issue("someone-else/other-repo", 1, "x")
 
 
+def test_close_task_issue_posts_comment_via_gh(feedback_mod, monkeypatch):
+    calls = []
+    _ok_proc(monkeypatch, feedback_mod, calls)
+    feedback_mod.close_task_issue(
+        "warni001/agent-crew", 42, "Stalled: no_review\n\nnothing shipped"
+    )
+    assert calls == [
+        ["gh", "issue", "close", "42", "--comment",
+         "Stalled: no_review\n\nnothing shipped", "--repo", "warni001/agent-crew"]
+    ]
+
+
+@pytest.mark.parametrize("repo, number", [
+    ("someone-else/other-repo", 42),
+    ("warni001/agent-crew", "https://github.com/someone-else/other-repo/issues/42"),
+    ("warni001/agent-crew", 0),
+])
+def test_close_task_issue_rejects_out_of_scope_target(feedback_mod, monkeypatch, repo, number):
+    calls = []
+    _ok_proc(monkeypatch, feedback_mod, calls)
+    with pytest.raises(ValueError):
+        feedback_mod.close_task_issue(repo, number, "Done")
+    assert not calls
+
+
 def test_ensure_label_creates_with_force(feedback_mod, monkeypatch):
     calls = []
     _ok_proc(monkeypatch, feedback_mod, calls)
