@@ -8,7 +8,7 @@ must pass now.
 
 Offline rules for the whole suite:
 
-- No network. Foundry clients and the ``gh`` CLI are always mocked
+- No network. Chat clients and the ``gh`` CLI are always mocked
   (``unittest.mock``). No live model calls, no live Azure calls.
 - ``agent_framework`` is stubbed in ``sys.modules`` so importing crew
   modules never tries to install or reach the real SDK.
@@ -93,6 +93,8 @@ if not _REAL_SDK_PRESENT:
         ),
         # Foundry chat client: separate agent_framework_foundry package
         "agent_framework_foundry": ("FoundryChatClient", "FoundryAgent"),
+        # Classic Azure OpenAI chat client: agent_framework_openai
+        "agent_framework_openai": ("OpenAIChatClient",),
         "agent_framework.azure": (),
     }
     for _name, _attrs in _stubs.items():
@@ -156,8 +158,8 @@ def mock_gh(monkeypatch):
 
 
 @pytest.fixture
-def mock_foundry_client():
-    """A fake Foundry chat client: records prompts, returns canned text."""
-    client = mock.MagicMock(name="foundry_client")
+def mock_chat_client():
+    """A fake chat client: records prompts, returns canned text."""
+    client = mock.MagicMock(name="chat_client")
     client.complete.return_value = mock.Mock(content="canned test reply")
     return client

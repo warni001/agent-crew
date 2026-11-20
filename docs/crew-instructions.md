@@ -20,7 +20,7 @@ without sign-off.
 
 ## Gates (all must pass before a merge)
 
-1. **Tests green.** `pytest` offline, mocked Foundry/`gh`. Failed
+1. **Tests green.** `pytest` offline, mocked chat/`gh`. Failed
    tests do not push, and do not merge.
 2. **Reviewer sign-off.** At least one review with role `reviewer`
    and `approved: true`. Builder, Planner, or Merger approval does
@@ -107,10 +107,11 @@ another repo is rejected before it runs. There are no exceptions.
 
 - `KEY_VAULT_URL` — Key Vault holding `GitHubToken`
 - `FOUNDRY_PROJECT_ENDPOINT` — `https://foundry-gpt-vaxvu3c2.services.ai.azure.com/api/projects/crew`
-  (the Foundry *project* endpoint — the bare account endpoint
-  `https://foundry-gpt-vaxvu3c2.cognitiveservices.azure.com/` is rejected
-  by config validation; `FOUNDRY_GPT_ENDPOINT` is kept only as a fallback
-  name for the same project endpoint value)
+  (the Foundry *project* endpoint, set by bicep; the chat endpoint is
+  derived from it — see Module contract below)
+- `AZURE_OPENAI_ENDPOINT` — optional override for the chat endpoint
+  (`https://foundry-gpt-vaxvu3c2.openai.azure.com`); unset means
+  "derive it from `FOUNDRY_PROJECT_ENDPOINT`"
 - `GITHUB_TOKEN` — the crew PAT, set from the vault by the Container App
   secret ref (the `gh` CLI reads the same secret as `GH_TOKEN`)
 
@@ -130,7 +131,9 @@ error naming the variable.
 
 - Planner + Reviewer: GPT-6.2 Astra, version `2026-11-17`, westus3
 - Builder + Merger: GPT-6.2 Sol, version `2026-11-17`, westus3
-- Endpoint: `https://foundry-gpt-vaxvu3c2.services.ai.azure.com/api/projects/crew` (project `crew`)
+- Endpoint: `https://foundry-gpt-vaxvu3c2.openai.azure.com` (classic
+  Azure OpenAI; derived from the Foundry project endpoint
+  `https://foundry-gpt-vaxvu3c2.services.ai.azure.com/api/projects/crew`)
 - No Claude in this subscription (PAYG ineligible for Claude in
   Foundry). Do not attempt a Claude deployment.
 - `agent-framework==1.26.0` exactly — versions 1.26.1/1.26.2 were
@@ -139,7 +142,7 @@ error naming the variable.
 ## First task
 
 Build v1 of yourself in this repo: the crew package, wired to the
-Foundry endpoint above, with the gates, feedback, and scope lock in
+classic endpoint above, with the gates, feedback, and scope lock in
 this file. Keep improving v1 until the next task arrives through an
 issue. The next project after v1 is the ResumeBot multi-tenant
 platform (a separate private repo) — it arrives through an issue
@@ -192,18 +195,23 @@ in the same PR.
 - `crew.tools.ALLOWED_REPOS = frozenset({"warni001/agent-crew"})`,
   `crew.tools.GHCR_IMAGE = "ghcr.io/warni001/agent-crew:latest"`,
   `crew.tools.assert_repo_allowed(repo)` raising `ValueError`.
-- `crew.clients.build_foundry_client(endpoint, client_factory=None)`
-  — factory injectable so tests stay offline. The real client is
-  `agent_framework_foundry.FoundryChatClient`, keyword-only args
-  `project_endpoint=...`, `model=...` (deployment name, e.g.
-  `gpt-6.2-astra`), `credential=...`.
-  `FoundryChatClient` takes a Foundry *project* endpoint, so
-  `FOUNDRY_PROJECT_ENDPOINT` is what the container is given (see
-  Config above); the bare account endpoint does not work here.
-  UNVERIFIED live: the project endpoint and the deployment names
-  have not yet been exercised against a live Foundry call — the
-  first live run is the verification. The test only pins the
-  factory-injection seam, never the live call.
+- `crew.clients.build_chat_client(endpoint, model, api_version=None,
+  client_factory=None)` — factory injectable so tests stay offline.
+  The real client is `agent_framework_openai.OpenAIChatClient`,
+  keyword-only args `model=...` (deployment name, e.g.
+  `gpt-6.2-astra`), `azure_endpoint=...` (the classic Azure OpenAI
+  endpoint, `https://foundry-gpt-vaxvu3c2.openai.azure.com`),
+  `credential=...`, `api_version="2025-04-01-preview"`.
+  Chat calls go to the classic endpoint, NOT the Foundry project
+  endpoint: proven live Nov 19, the project endpoint returns HTTP
+  200 with zero usage and no message output even for "Say hello",
+  while the classic endpoint returns real text and the ledger prompt
+  returns valid JSON with no format forcing. The endpoint is
+  `config.resolve_azure_openai_endpoint()` — the explicit
+  `AZURE_OPENAI_ENDPOINT`, else derived from the
+  `FOUNDRY_PROJECT_ENDPOINT` bicep already sets — so no bicep change
+  is needed. The test only pins the factory-injection seam, never
+  the live call.
 
 ## How to run locally
 
@@ -213,6 +221,6 @@ python3.14 -m venv .venv
 .venv/bin/python -m pytest tests/ -v
 ```
 
-Tests run offline: Foundry clients and the `gh` CLI are mocked.
+Tests run offline: chat clients and the `gh` CLI are mocked.
 No live model calls, no live Azure calls. The full crew needs the
 environment variables above plus Azure access; the tests do not.

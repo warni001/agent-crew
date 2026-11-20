@@ -13,14 +13,15 @@ not from memory or training data. What inspection established:
   require_plan_signoff=False)``, ``MagenticBuilder`` with
   ``.build()`` / ``.with_checkpointing()`` / ``.with_plan_review()``,
   ``StandardMagenticManager``.
-- The Foundry client is ``agent_framework_foundry.FoundryChatClient``
-  (companion package ``agent-framework-foundry`` 1.16.2), keyword-only
-  args: ``FoundryChatClient(*, project_endpoint=None,
-  project_client=None, model=None, credential=None, ...)``.
-  NOTE: ``project_endpoint`` is a Foundry *project* endpoint, not
-  necessarily the bare account endpoint in FOUNDRY_GPT_ENDPOINT —
-  that mapping is UNVERIFIED (see tests/test_clients.py and the
-  report). No test here calls the network.
+- The chat client is ``agent_framework_openai.OpenAIChatClient``
+  (companion package ``agent-framework-openai`` 1.18.2), Azure
+  overload keyword-only args: ``OpenAIChatClient(*, model=None,
+  azure_endpoint=None, credential=None, api_version=None, ...)``.
+  The classic endpoint (``https://<account>.openai.azure.com``)
+  with ``api_version="2025-04-01-preview"`` is the combination the
+  Nov 19 live sweep proved: the Foundry project endpoint returns
+  hollow 200s (zero usage, no message output) while the classic
+  endpoint returns real text. No test here calls the network.
 
 These tests SKIP when the real SDK is not installed (the conftest
 stub is then in place instead, and the stub deliberately exposes
@@ -97,15 +98,33 @@ def test_magentic_builder_methods():
         assert callable(getattr(orch.MagenticBuilder, method)), method
 
 
-def test_foundry_chat_client_signature():
+def test_openai_chat_client_azure_signature():
     _real_sdk()
-    foundry = importlib.import_module("agent_framework_foundry")
-    assert hasattr(foundry, "FoundryChatClient")
-    sig = inspect.signature(foundry.FoundryChatClient.__init__)
-    for kw in ("project_endpoint", "model", "credential"):
+    if importlib.util.find_spec("agent_framework_openai") is None:
+        pytest.skip("agent-framework-openai not installed")
+    openai_mod = importlib.import_module("agent_framework_openai")
+    assert hasattr(openai_mod, "OpenAIChatClient")
+    sig = inspect.signature(openai_mod.OpenAIChatClient.__init__)
+    # model is the one positional-or-keyword arg; the Azure kwargs are
+    # keyword-only (verified against the installed 1.18.2 signature).
+    assert sig.parameters["model"].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+    for kw in ("azure_endpoint", "credential", "api_version"):
         assert kw in sig.parameters, f"missing kwarg: {kw}"
         assert sig.parameters[kw].kind == inspect.Parameter.KEYWORD_ONLY, kw
-    assert hasattr(foundry, "FoundryAgent")
+
+
+def test_openai_default_api_version_is_preview_not_proven():
+    """The SDK default API version is "preview" — the proven
+    2025-04-01-preview must be passed explicitly (see
+    crew/clients.py AZURE_OPENAI_API_VERSION)."""
+    _real_sdk()
+    if importlib.util.find_spec("agent_framework_openai") is None:
+        pytest.skip("agent-framework-openai not installed")
+    from agent_framework_openai._chat_client import (
+        DEFAULT_AZURE_OPENAI_RESPONSES_API_VERSION,
+    )
+
+    assert DEFAULT_AZURE_OPENAI_RESPONSES_API_VERSION == "preview"
 
 
 def test_workflow_builder_methods():

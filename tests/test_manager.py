@@ -1,28 +1,25 @@
-"""StructuredLedgerManager: the progress ledger is forced to a JSON schema.
+"""Plain Magentic manager: the progress ledger is a plain call, no format.
 
-Contract (see crew/manager.py): the manager model answers the plain-text
-JSON instruction with a reasoning-only response and empty text, so the
-parent's ledger parse fails on every attempt. The subclass passes a
-json_schema response_format in ``options`` on the ledger call only, and
-feeds a parse error back into the next attempt's prompt instead of
-re-sending identical input. All model calls are faked; no network.
+Contract (see crew/orchestration.py): the manager is the plain
+StandardMagenticManager — no StructuredLedgerManager, no
+response_format. The ledger parses because the model returns real
+text on the classic Azure OpenAI endpoint (proven live Nov 19: the
+exact ledger prompt returns valid JSON with no format forcing; the
+Foundry project endpoint returned hollow 200s, which is what broke
+the ledger). All model calls are faked; no network.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
 import pytest
 from agent_framework import Message
-from agent_framework.orchestrations import MagenticContext
+from agent_framework.orchestrations import MagenticContext, StandardMagenticManager
 
 from conftest import require_crew
-
-
-@pytest.fixture
-def manager_mod():
-    return require_crew("manager")
 
 
 @pytest.fixture
@@ -79,8 +76,6 @@ class FakeAgent:
 
 
 def _run(manager, context):
-    import asyncio
-
     return asyncio.run(manager.create_progress_ledger(context))
 
 
@@ -92,8 +87,8 @@ def _empty_msg():
     return Message(role="assistant", contents=[])
 
 
-def test_ledger_parses_valid_json(manager_mod):
-    manager = manager_mod.StructuredLedgerManager(FakeAgent([_msg(json.dumps(VALID_LEDGER))]))
+def test_plain_ledger_call_parses_valid_json():
+    manager = StandardMagenticManager(FakeAgent([_msg(json.dumps(VALID_LEDGER))]))
     ledger = _run(manager, make_context())
     assert ledger.is_request_satisfied.answer is False
     assert ledger.is_in_loop.answer is False
@@ -102,86 +97,27 @@ def test_ledger_parses_valid_json(manager_mod):
     assert ledger.instruction_or_question.answer == "Plan the task."
 
 
-def test_ledger_call_passes_response_format(manager_mod):
+def test_plain_ledger_call_passes_no_response_format():
+    """The ledger call is plain: no options, no format forcing."""
     agent = FakeAgent([_msg(json.dumps(VALID_LEDGER))])
-    manager = manager_mod.StructuredLedgerManager(agent)
+    manager = StandardMagenticManager(agent)
     _run(manager, make_context())
     assert len(agent.calls) == 1
-    assert agent.calls[0]["options"] == {"response_format": manager_mod.LEDGER_RESPONSE_FORMAT}
+    assert agent.calls[0]["options"] is None
 
 
-def test_response_format_is_strict_json_schema(manager_mod):
-    fmt = manager_mod.LEDGER_RESPONSE_FORMAT
-    assert fmt["type"] == "json_schema"
-    inner = fmt["json_schema"]
-    assert inner["name"] == "progress_ledger"
-    assert inner["strict"] is True
-    schema = inner["schema"]
-    assert schema["type"] == "object"
-    assert schema["additionalProperties"] is False
-    assert sorted(schema["required"]) == sorted(schema["properties"])
-    bool_fields = ("is_request_satisfied", "is_in_loop", "is_progress_being_made")
-    str_fields = ("next_speaker", "instruction_or_question")
-    for field in bool_fields:
-        item = schema["properties"][field]
-        assert item["properties"]["answer"] == {"type": "boolean"}
-        assert item["additionalProperties"] is False
-        assert item["required"] == ["reason", "answer"]
-    for field in str_fields:
-        item = schema["properties"][field]
-        assert item["properties"]["answer"] == {"type": "string"}
-        assert item["additionalProperties"] is False
-        assert item["required"] == ["reason", "answer"]
-
-
-def test_response_format_converts_to_responses_text_format(manager_mod):
-    """The exact dict the manager sends is accepted by the real Responses
-    client's translation (_convert_response_format is pure: it reads only
-    its argument, so it is called unbound). This is the runtime check
-    that the format reaches the API as text.format, not an assumption."""
-    import importlib.util
-
-    if importlib.util.find_spec("agent_framework_openai") is None:
-        pytest.skip("agent-framework-openai not installed")
-    from agent_framework_openai._chat_client import RawOpenAIChatClient
-
-    converted = RawOpenAIChatClient._convert_response_format(None, manager_mod.LEDGER_RESPONSE_FORMAT)
-    assert converted == {
-        "type": "json_schema",
-        "name": "progress_ledger",
-        "schema": manager_mod.LEDGER_RESPONSE_FORMAT["json_schema"]["schema"],
-        "strict": True,
-    }
-
-
-def test_reasoning_only_response_fails_after_three_attempts(manager_mod):
+def test_empty_response_still_fails_after_retries():
+    """An empty reply still fails closed after the parent's retries —
+    the fix was the endpoint returning text, not the manager."""
     agent = FakeAgent([_empty_msg()])
-    manager = manager_mod.StructuredLedgerManager(agent)
+    manager = StandardMagenticManager(agent)
     with pytest.raises(RuntimeError, match="Progress ledger parse failed after 3 attempt"):
         _run(manager, make_context())
     assert len(agent.calls) == 3
-    # Retries carry the parse error; they are not the identical prompt.
-    first = agent.calls[0]["messages"][-1].text
-    second = agent.calls[1]["messages"][-1].text
-    third = agent.calls[2]["messages"][-1].text
-    assert "could not be parsed" in second
-    assert "could not be parsed" in third
-    assert second != first and third != first
-    assert all(call["options"] == {"response_format": manager_mod.LEDGER_RESPONSE_FORMAT} for call in agent.calls)
 
 
-def test_plan_and_replan_calls_stay_unformatted(manager_mod):
-    agent = FakeAgent([_msg("some facts"), _msg("some plan")])
-    manager = manager_mod.StructuredLedgerManager(agent)
-    import asyncio
-
-    asyncio.run(manager.plan(make_context()))
-    assert len(agent.calls) == 2
-    assert all(call["options"] is None for call in agent.calls)
-
-
-def test_wiring_builds_workflow_with_structured_manager(orchestration_mod, config_mod, monkeypatch):
-    """build_workflow passes a StructuredLedgerManager, not the plain agent."""
+def test_wiring_builds_workflow_with_plain_manager(orchestration_mod, config_mod, monkeypatch):
+    """build_workflow passes the plain manager agent, not a subclass."""
     def fake_roles(config):
         roles = {name: FakeAgent([], name=name) for name in ("planner", "builder", "reviewer", "merger")}
         roles["manager"] = FakeAgent([_msg(json.dumps(VALID_LEDGER))])

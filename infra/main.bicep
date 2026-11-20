@@ -92,10 +92,11 @@ var suffix = uniqueString(resourceGroup().id)
 var vaultName = 'kv-${replace(baseName, '-', '')}-${take(suffix, 8)}'
 var gptAccountName = 'foundry-gpt-${take(suffix, 8)}'
 var gptProjectName = 'crew'
-// FoundryChatClient needs a Foundry *project* endpoint, not the
-// Cognitive Services account endpoint: the account endpoint is rejected
-// by crew/config.py validation. The project endpoint is built from the
-// account name and the project name (no .env value for this).
+// The project endpoint is set on the container app; crew/config.py
+// derives the classic Azure OpenAI chat endpoint from it (or from the
+// Cognitive Services account endpoint) when AZURE_OPENAI_ENDPOINT is
+// unset. Chat calls go to the classic endpoint, not this one — the
+// project endpoint returns hollow 200s (proven live Nov 19).
 var gptProjectEndpoint = 'https://${gptAccountName}.services.ai.azure.com/api/projects/${gptProjectName}'
 var claudeAccountName = 'foundry-claude-${take(suffix, 8)}'
 var logAnalyticsName = 'log-${baseName}'

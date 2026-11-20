@@ -182,12 +182,19 @@ def test_project_endpoint_validates(config_mod):
     config.validate()  # must not raise
 
 
-def test_account_endpoint_rejected(config_mod):
+def test_account_endpoint_derives(config_mod):
+    """The bare account endpoint is a valid derivation source now:
+    it names the same account, so it resolves to the classic
+    endpoint. (It was rejected before the Nov 19 endpoint switch,
+    when the Foundry project endpoint was the only accepted shape.)"""
     config = make_config(
         config_mod, FOUNDRY_PROJECT_ENDPOINT=ACCOUNT_ENDPOINT
     )
-    with pytest.raises(ValueError):
-        config.validate()
+    config.validate()  # must not raise
+    assert (
+        config.resolve_azure_openai_endpoint()
+        == "https://foundry-gpt-vaxvu3c2.openai.azure.com"
+    )
 
 
 # --- poll interval and one-shot mode ---

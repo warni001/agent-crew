@@ -7,18 +7,16 @@ contains a '{'.
 
 Run from the repo root on the Mac (az login must be active):
 
-    .venv/bin/python infra/ledger-repro.py [--structured]
+    .venv/bin/python infra/ledger-repro.py
 
-Empty text -> the model returns reasoning-only / no message item (hypothesis 1).
-Prose -> it answers in natural language despite the JSON instruction (hypothesis 2).
-Valid JSON -> the live failure is history-dependent; rerun with the real history.
-
---structured sends the same prompt with the json_schema response_format
-from crew/manager.py, the same fix the crew's manager uses. If the ledger
-parses there, the fix is verified live before any deploy.
+Outcome (Nov 19, live sweep): the plain call returns valid JSON on the
+classic Azure OpenAI endpoint. The failure was the Foundry project
+endpoint, which returns hollow 200s — not the model, the prompt, or
+the format. The --structured variant is gone with crew/manager.py:
+json_schema 400s on both GPT-6.2 model versions on Azure, and plain
+JSON parses fine on the classic endpoint.
 """
 
-import argparse
 import asyncio
 import os
 import sys
@@ -32,7 +30,6 @@ from agent_framework_orchestrations._magentic import (
 )
 
 from crew.config import CrewConfig
-from crew.manager import LEDGER_RESPONSE_FORMAT
 from crew.roles import _MANAGER_INSTRUCTIONS, make_chat_client
 
 ENDPOINT = os.environ.get(
@@ -51,9 +48,6 @@ NAMES = "planner, builder, reviewer, merger"
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--structured", action="store_true")
-    args = parser.parse_args()
     config = CrewConfig(foundry_project_endpoint=ENDPOINT)
     manager = Agent(
         make_chat_client(config, config.manager_model),
@@ -62,9 +56,7 @@ async def main() -> None:
     )
     prompt = ORCHESTRATOR_PROGRESS_LEDGER_PROMPT.format(task=TASK, team=TEAM, names=NAMES)
     session = manager.create_session()
-    options = {"response_format": LEDGER_RESPONSE_FORMAT} if args.structured else None
-    response = await manager.run([Message(role="user", contents=[prompt])], session=session, options=options)
-    print(f"structured: {args.structured}")
+    response = await manager.run([Message(role="user", contents=[prompt])], session=session)
     print(f"messages: {len(response.messages)}")
     last = response.messages[-1]
     print(f"last.text repr: {last.text!r}")

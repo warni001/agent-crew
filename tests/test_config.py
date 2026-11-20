@@ -114,3 +114,79 @@ def test_no_secret_literals_in_crew_config_source(config_mod):
         assert literal not in src
     assert 'open(".env' not in src and "open('.env" not in src
     assert "load_dotenv" not in src
+
+
+# --- classic endpoint derivation (Nov 19: chat calls go to the classic
+# Azure OpenAI endpoint, derived from the Foundry project/account
+# endpoint bicep already sets, unless AZURE_OPENAI_ENDPOINT overrides) ---
+
+PROJECT_ENDPOINT = "https://foundry-gpt-vaxvu3c2.services.ai.azure.com/api/projects/crew"
+ACCOUNT_ENDPOINT = "https://foundry-gpt-vaxvu3c2.cognitiveservices.azure.com/"
+CLASSIC_ENDPOINT = "https://foundry-gpt-vaxvu3c2.openai.azure.com"
+
+
+def test_derive_classic_from_project_endpoint(config_mod):
+    assert config_mod.derive_classic_endpoint(PROJECT_ENDPOINT) == CLASSIC_ENDPOINT
+
+
+def test_derive_classic_from_account_endpoint(config_mod):
+    assert config_mod.derive_classic_endpoint(ACCOUNT_ENDPOINT) == CLASSIC_ENDPOINT
+
+
+def test_derive_classic_passes_classic_through(config_mod):
+    assert config_mod.derive_classic_endpoint(CLASSIC_ENDPOINT) == CLASSIC_ENDPOINT
+    assert (
+        config_mod.derive_classic_endpoint(CLASSIC_ENDPOINT + "/")
+        == CLASSIC_ENDPOINT
+    )
+
+
+def test_derive_classic_rejects_garbage(config_mod):
+    assert config_mod.derive_classic_endpoint("https://evil.example/") == ""
+    assert config_mod.derive_classic_endpoint("") == ""
+    assert config_mod.derive_classic_endpoint("not a url") == ""
+
+
+def test_resolve_explicit_endpoint_wins(config_mod):
+    cfg = config_mod.CrewConfig(
+        foundry_project_endpoint=PROJECT_ENDPOINT,
+        azure_openai_endpoint="https://other.openai.azure.com",
+    )
+    assert cfg.resolve_azure_openai_endpoint() == "https://other.openai.azure.com"
+
+
+def test_resolve_derives_when_no_explicit_endpoint(config_mod):
+    cfg = config_mod.CrewConfig(foundry_project_endpoint=PROJECT_ENDPOINT)
+    assert cfg.resolve_azure_openai_endpoint() == CLASSIC_ENDPOINT
+
+
+def test_resolve_empty_when_nothing_usable(config_mod):
+    cfg = config_mod.CrewConfig(foundry_project_endpoint="https://evil.example/")
+    assert cfg.resolve_azure_openai_endpoint() == ""
+
+
+def test_from_env_reads_azure_openai_endpoint(config_mod, clean_env, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://other.openai.azure.com")
+    cfg = config_mod.CrewConfig.from_env(env=dict(os.environ))
+    assert cfg.azure_openai_endpoint == "https://other.openai.azure.com"
+    assert cfg.resolve_azure_openai_endpoint() == "https://other.openai.azure.com"
+
+
+def test_validate_rejects_unresolvable_endpoint(config_mod):
+    cfg = config_mod.CrewConfig(foundry_project_endpoint="https://evil.example/")
+    with pytest.raises(ValueError):
+        cfg.validate()
+
+
+def test_validate_rejects_non_classic_explicit_endpoint(config_mod):
+    cfg = config_mod.CrewConfig(
+        foundry_project_endpoint=PROJECT_ENDPOINT,
+        azure_openai_endpoint="https://evil.example/",
+    )
+    with pytest.raises(ValueError):
+        cfg.validate()
+
+
+def test_validate_passes_with_explicit_classic_endpoint_only(config_mod):
+    cfg = config_mod.CrewConfig(azure_openai_endpoint=CLASSIC_ENDPOINT)
+    cfg.validate()  # must not raise

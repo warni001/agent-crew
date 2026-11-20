@@ -187,12 +187,15 @@ def test_crew_instructions_names_verified_magentic_api(repo_root):
     assert "there is no `chatagent` in 1.26.0" in lower
 
 
-def test_crew_instructions_flags_foundry_endpoint_mapping(repo_root):
-    """The project_endpoint mapping is flagged unverified, not assumed."""
+def test_crew_instructions_states_classic_endpoint(repo_root):
+    """The instructions name the classic endpoint and the proven API
+    version — the Foundry project endpoint story is gone."""
     text = _read(repo_root, "docs/crew-instructions.md")
-    assert "FoundryChatClient" in text
-    assert "project_endpoint" in text
-    assert "UNVERIFIED" in text
+    assert "OpenAIChatClient" in text
+    assert "azure_endpoint" in text
+    assert "2025-04-01-preview" in text
+    assert "FoundryChatClient" not in text
+    assert "UNVERIFIED" not in text
 
 
 def test_docs_never_refer_to_john_in_third_person(repo_root):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 ALLOWED_REPO = "warni001/agent-crew"
 
@@ -17,16 +18,36 @@ ALLOWED_REPO = "warni001/agent-crew"
 class ConfigError(ValueError):
     """Raised when required config is missing or empty."""
 
-# FoundryChatClient (agent-framework 1.26.0, verified against the installed
-# package) builds an AIProjectClient from the project endpoint, so the
-# endpoint must be a Foundry *project* endpoint:
-#   https://<account>.services.ai.azure.com/api/projects/<project>
-# The Cognitive Services account endpoint
-# (https://<account>.cognitiveservices.azure.com/) is NOT a project
-# endpoint and will not work here. FOUNDRY_GPT_ENDPOINT is accepted as an
-# alias for the project endpoint only; a cognitiveservices.azure.com value
-# is rejected with a clear error. Untested against live Foundry.
-_PROJECT_ENDPOINT_MARKER = "services.ai.azure.com/api/projects/"
+# Chat calls go to the classic Azure OpenAI endpoint
+# (https://<account>.openai.azure.com), NOT the Foundry project
+# endpoint — proven live Nov 19: the project endpoint returns HTTP
+# 200 with zero usage and no message output even for "Say hello",
+# while the classic endpoint returns real text and the ledger prompt
+# returns valid JSON with no format forcing. OpenAIChatClient
+# (agent-framework-openai 1.18.2) takes the classic endpoint as
+# azure_endpoint with api_version 2025-04-01-preview (see
+# crew/clients.py). FOUNDRY_PROJECT_ENDPOINT is still set by bicep;
+# the classic endpoint is derived from it when AZURE_OPENAI_ENDPOINT
+# is unset, so no bicep change is needed.
+_CLASSIC_ENDPOINT_SUFFIX = ".openai.azure.com"
+
+
+def derive_classic_endpoint(value: str) -> str:
+    """Classic Azure OpenAI endpoint for a Foundry account value.
+
+    ``https://<account>.services.ai.azure.com/api/projects/<project>``
+    and ``https://<account>.cognitiveservices.azure.com/`` both name
+    the same account, whose classic endpoint is
+    ``https://<account>.openai.azure.com``. A classic endpoint passes
+    through unchanged. Anything else returns "" (not derivable).
+    """
+    host = urlparse(value or "").hostname or ""
+    for suffix in (".services.ai.azure.com", ".cognitiveservices.azure.com"):
+        if host.endswith(suffix):
+            return f"https://{host[: -len(suffix)]}{_CLASSIC_ENDPOINT_SUFFIX}"
+    if host.endswith(_CLASSIC_ENDPOINT_SUFFIX):
+        return f"https://{host}"
+    return ""
 
 
 @dataclass(frozen=True)
@@ -35,6 +56,9 @@ class CrewConfig:
 
     repo: str = ALLOWED_REPO
     foundry_project_endpoint: str = ""
+    # Explicit classic endpoint override (env AZURE_OPENAI_ENDPOINT).
+    # Empty means "derive it from foundry_project_endpoint".
+    azure_openai_endpoint: str = ""
     key_vault_url: str = ""
     github_token: str = ""  # From Key Vault at runtime; never logged.
     planner_model: str = "gpt-6-2-astra"  # Deployment name, not model name.
@@ -62,6 +86,14 @@ class CrewConfig:
         """Alias for foundry_project_endpoint (the env var name)."""
         return self.foundry_project_endpoint
 
+    def resolve_azure_openai_endpoint(self) -> str:
+        """Classic endpoint for chat calls: the explicit
+        AZURE_OPENAI_ENDPOINT wins, else derive it from the Foundry
+        project/account endpoint. "" means nothing usable was set."""
+        if self.azure_openai_endpoint:
+            return self.azure_openai_endpoint.rstrip("/")
+        return derive_classic_endpoint(self.foundry_project_endpoint)
+
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> CrewConfig:
         """Build config from the environment (or a supplied mapping)."""
@@ -72,6 +104,7 @@ class CrewConfig:
         return cls(
             repo=env.get("CREW_REPO", ALLOWED_REPO),
             foundry_project_endpoint=endpoint,
+            azure_openai_endpoint=env.get("AZURE_OPENAI_ENDPOINT", ""),
             key_vault_url=env.get("KEY_VAULT_URL", ""),
             github_token=env.get("GITHUB_TOKEN", ""),
             planner_model=env.get("CREW_MODEL_PLANNER", "gpt-6-2-astra"),
@@ -98,15 +131,18 @@ class CrewConfig:
             problems.append(
                 f"CREW_REPO must be {ALLOWED_REPO}, got {self.repo!r}"
             )
-        if not self.foundry_project_endpoint:
+        endpoint = self.resolve_azure_openai_endpoint()
+        if not endpoint:
             problems.append(
-                "set FOUNDRY_PROJECT_ENDPOINT (or FOUNDRY_GPT_ENDPOINT)"
+                "no usable chat endpoint: set AZURE_OPENAI_ENDPOINT, or "
+                "FOUNDRY_PROJECT_ENDPOINT as a Foundry project or account endpoint"
             )
-        elif _PROJECT_ENDPOINT_MARKER not in self.foundry_project_endpoint:
+        elif not (urlparse(endpoint).hostname or "").endswith(
+            _CLASSIC_ENDPOINT_SUFFIX
+        ):
             problems.append(
-                "FOUNDRY_PROJECT_ENDPOINT must be a Foundry project "
-                "endpoint (...services.ai.azure.com/api/projects/<project>); "
-                "a cognitiveservices.azure.com account endpoint will not work"
+                "AZURE_OPENAI_ENDPOINT must be a classic Azure OpenAI "
+                f"endpoint (https://<account>.openai.azure.com), got {endpoint!r}"
             )
         if self.budget_limit_usd <= 0:
             problems.append("CREW_BUDGET_LIMIT_USD must be > 0")
@@ -135,5 +171,6 @@ def load_config(env: dict[str, str] | None = None) -> CrewConfig:
     return CrewConfig(
         key_vault_url=values["KEY_VAULT_URL"],
         foundry_project_endpoint=values["FOUNDRY_GPT_ENDPOINT"],
+        azure_openai_endpoint=env.get("AZURE_OPENAI_ENDPOINT", ""),
         github_token=values["GITHUB_TOKEN"],
     )

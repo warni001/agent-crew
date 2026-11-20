@@ -173,11 +173,12 @@ python3.14 -m venv .venv
 .venv/bin/python -m pytest tests/ -v
 ```
 
-Tests run offline: the Foundry clients and the `gh` CLI are mocked
+Tests run offline: the chat clients and the `gh` CLI are mocked
 (`unittest.mock`, see `tests/conftest.py`). No live model calls, no
 live Azure calls. The full crew needs `KEY_VAULT_URL`,
-`FOUNDRY_PROJECT_ENDPOINT` (the Foundry project endpoint, not the
-bare account endpoint), and `GITHUB_TOKEN` from the environment;
+`FOUNDRY_PROJECT_ENDPOINT` (the Foundry project endpoint, from which
+the classic Azure OpenAI chat endpoint is derived — or set
+`AZURE_OPENAI_ENDPOINT` directly), and `GITHUB_TOKEN` from the environment;
 the tests do not. The crew package (`crew/`) is built by a parallel
 track — tests that need it skip until it merges, and the skip list
 names the blocking module.

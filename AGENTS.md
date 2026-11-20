@@ -22,7 +22,8 @@ Planner, Builder, Reviewer, Merger. Read this file first, then
   and nowhere else. Your token is scoped to this repo; the tools
   enforce the same boundary in code. Never touch another repo.
 - **Config from the environment only.** `KEY_VAULT_URL`,
-  `FOUNDRY_GPT_ENDPOINT`, `GITHUB_TOKEN`. No secrets in code, no
+  `FOUNDRY_GPT_ENDPOINT`, `GITHUB_TOKEN`, plus the optional
+  `AZURE_OPENAI_ENDPOINT` override. No secrets in code, no
   `.env` reads, no literal tokens anywhere.
 - **No human in the loop — but never block waiting.** If you need
   something from a human, open a GitHub issue and keep working.
@@ -42,7 +43,7 @@ Planner, Builder, Reviewer, Merger. Read this file first, then
   resource group either way — do not rely on it; stop yourself first.
 - **Pin:** `agent-framework==1.26.0` exactly. Versions 1.26.1/1.26.2
   were hijacked and removed — never install them.
-- **Tests:** offline only. Mock the Foundry clients and the `gh`
+- **Tests:** offline only. Mock the chat clients and the `gh`
   CLI. Run `pytest` before every push; failed tests do not push.
 - **Address the reader as "you".** Never refer to anyone in the
   third person in docs or code.

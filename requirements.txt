@@ -4,7 +4,12 @@
 # on the index and requires agent-framework-core[all]==1.26.0.
 agent-framework==1.26.0
 agent-framework-core==1.26.0
-# Direct import in crew/roles.py (DefaultAzureCredential for Foundry).
+# Direct import in crew/clients.py (OpenAIChatClient on the classic
+# Azure OpenAI endpoint). Also arrives transitively via
+# agent-framework-core[all] -> agent-framework-foundry; the pin makes
+# the direct import declared. Version is the installed, verified one.
+agent-framework-openai==1.18.2
+# Direct import in crew/clients.py (DefaultAzureCredential).
 azure-identity==1.27.0
 # Direct import in crew/blob_ledger.py (BlobClient for the run ledger).
 azure-storage-blob==12.31.1

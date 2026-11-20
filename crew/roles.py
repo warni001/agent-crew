@@ -4,10 +4,12 @@ Planner + Reviewer run on Astra; Builder + Merger run on Sol; the
 Magentic manager runs on Astra. Deployment names (gpt-6-2-astra /
 gpt-6-2-sol) come from config, overridable by env.
 
-All API use below was verified against the installed agent-framework
-1.26.0 package (Agent, FoundryChatClient, MagenticBuilder) — not written
-from memory. No live Foundry call has been made; the client wiring is
-untested against the live endpoint.
+All API use below was verified against the installed packages
+(agent-framework 1.26.0, agent-framework-openai 1.18.2) — not written
+from memory. Chat calls go to the classic Azure OpenAI endpoint via
+OpenAIChatClient: proven live Nov 19, the Foundry project endpoint
+returns hollow 200s (zero usage, no message output) while the
+classic endpoint returns real text.
 """
 
 from __future__ import annotations
@@ -15,9 +17,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_framework import Agent
-from agent_framework.foundry import FoundryChatClient
-from azure.identity import DefaultAzureCredential
+from agent_framework_openai import OpenAIChatClient
 
+from .clients import build_chat_client
 from .config import CrewConfig
 from .tools import BUILD_TOOLS, MERGE_TOOLS, READ_TOOLS, REVIEW_TOOLS
 
@@ -90,17 +92,16 @@ def load_ponytail(repo_root: str | Path = ".") -> str:
     return PONYTAIL_CHECKLIST
 
 
-def make_chat_client(config: CrewConfig, model: str) -> FoundryChatClient:
-    """Foundry chat client for one model deployment.
+def make_chat_client(config: CrewConfig, model: str) -> OpenAIChatClient:
+    """Chat client for one model deployment, on the classic endpoint.
 
     Auth is Entra ID via DefaultAzureCredential (the container app's
     managed identity at runtime). No key or token is handled here.
+    The endpoint is config.resolve_azure_openai_endpoint() — the
+    explicit AZURE_OPENAI_ENDPOINT, else derived from the Foundry
+    project/account endpoint bicep already sets.
     """
-    return FoundryChatClient(
-        project_endpoint=config.foundry_project_endpoint,
-        model=model,
-        credential=DefaultAzureCredential(),
-    )
+    return build_chat_client(config.resolve_azure_openai_endpoint(), model)
 
 
 def build_roles(config: CrewConfig) -> dict[str, Agent]:
