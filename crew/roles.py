@@ -77,7 +77,7 @@ never open a PR on red. Your response is the reviewer's only
 context: name the PR number and what changed in it. {_SCOPE}
 {_VOICE}"""
 
-_REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Check the diff against
+_REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Read the PR's description and diff with read_pr first — that is how you see what changed and what the author claims. Check the diff against
 the Ponytail checklist below, verify tests passed, and verify nothing
 outside the task scope crept in. Record your verdict with
 record_sign_off (verdict 'approved' or 'changes_requested', with notes).
