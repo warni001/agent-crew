@@ -27,11 +27,7 @@ from agent_framework import tool
 
 from .config import ALLOWED_REPO
 
-# Default cap for a command's combined output: ~20KB, about 5k tokens.
-# 4000 was far too small — a failing pytest run or a long listing
-# was cut before the useful part, and file reads broke entirely.
-# Commands whose full output is the point (file reads) pass a
-# larger cap explicitly; this default only bounds the rest.
+# Default cap for command diagnostics: ~20KB, about 5k tokens.
 _MAX_OUTPUT = 20_000
 _SHELL_FORBIDDEN = (";", "&&", "||", "|", ">", "<", "`", "$(")
 # Builder needs git, tests, and read-only inspection — nothing else.
@@ -47,24 +43,36 @@ _SHELL_ALLOWED_PREFIXES = (
 )
 
 
-def _run(cmd: list[str], timeout: int = 120, max_output: int | None = _MAX_OUTPUT) -> str:
-    """Run a command (no shell), return stdout, raise on failure.
+def _run(
+    cmd: list[str],
+    timeout: int = 120,
+    max_output: int | None = _MAX_OUTPUT,
+    *,
+    raw_stdout: bool = False,
+) -> str:
+    """Run a command (no shell), raise on failure.
 
     Never pass secrets in `cmd` and never log the environment: `gh`
-    reads GH_TOKEN from the environment itself. Output is truncated
-    to `max_output` chars (default 4000) — pass a larger cap, or
-    None for no cap, when the full output is the point (file reads).
+    reads GH_TOKEN from the environment itself. By default return
+    stripped stdout and stderr, bounded by `max_output`. For file
+    reads, `raw_stdout` returns stdout without stripping or truncating.
+
+    The run is binary only for raw reads: text mode (`text=True`)
+    normalizes CRLF and lone CR to LF, so a raw read would silently
+    lose the file's real line endings. Ordinary commands keep text
+    mode, so their diagnostics behave exactly as before. Raw bytes
+    are decoded by hand below.
     """
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
+            cmd, capture_output=True, text=not raw_stdout, timeout=timeout
         )
     except subprocess.TimeoutExpired:
         message = f"command timed out after {timeout}s: {cmd[0]}"
         logging.getLogger("crew.tools").warning("command failed: %s", message)
         raise RuntimeError(message) from None
-    out = (proc.stdout + proc.stderr).strip()
     if proc.returncode != 0:
+        out = _decode(proc.stdout + proc.stderr).strip()
         # Log the failure here, with the command and its output: the
         # framework catches this exception and hands the model a
         # generic "Error: Function failed." (unless detailed errors
@@ -77,7 +85,22 @@ def _run(cmd: list[str], timeout: int = 120, max_output: int | None = _MAX_OUTPU
         )
         logging.getLogger("crew.tools").warning("command failed: %s", message)
         raise RuntimeError(message)
+    if raw_stdout:
+        return _decode(proc.stdout)
+    out = _decode(proc.stdout + proc.stderr).strip()
     return out if max_output is None else out[:max_output]
+
+
+def _decode(data: bytes | str) -> str:
+    """Decode subprocess output without newline translation.
+
+    `surrogateescape` keeps non-UTF-8 bytes round-trippable instead
+    of raising on a binary file. A str passes through unchanged
+    (tests mock subprocess.run with str stdout).
+    """
+    if isinstance(data, str):
+        return data
+    return data.decode("utf-8", errors="surrogateescape")
 
 
 ALLOWED_REPOS = frozenset({ALLOWED_REPO})
@@ -138,22 +161,42 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
     failed with 'Incorrect padding' and the crew could not read its
     own larger files (tools.py, roles.py, config.py). A 404 is a
     FileNotFoundError; a directory path is a ValueError.
+
+    The directory check reads the path's type from repository
+    metadata, not from the content: a file's content can legitimately
+    start with `[` (a JSON array, a bracket-led line), so guessing
+    "directory" from the content misreads real files. A directory's
+    contents listing is a JSON array, which the jq reports as "dir";
+    a file's metadata has type "file".
     """
     _check_repo(repo)
+    # The metadata read uses stdout alone: _run's default mixes stderr
+    # into the output, so a successful `dir` response accompanied by
+    # a stderr warning would fail the `== "dir"` check below.
+    try:
+        kind = _run(
+            [
+                "gh", "api", f"repos/{repo}/contents/{path}?ref={ref}",
+                "--jq", 'if type == "array" then "dir" else .type end',
+            ],
+            raw_stdout=True,
+        ).strip()
+    except RuntimeError as exc:
+        if "404" in str(exc):
+            raise FileNotFoundError(f"{path!r} not found in {repo}@{ref}") from exc
+        raise
+    if kind == "dir":
+        raise ValueError(f"{path!r} is a directory in {repo}@{ref}, not a file")
     try:
         out = _run(
             ["gh", "api", "-H", "Accept: application/vnd.github.raw",
              f"repos/{repo}/contents/{path}?ref={ref}"],
-            max_output=_READ_MAX_OUTPUT,
+            raw_stdout=True,
         )
     except RuntimeError as exc:
         if "404" in str(exc):
             raise FileNotFoundError(f"{path!r} not found in {repo}@{ref}") from exc
         raise
-    if not out.strip():
-        raise FileNotFoundError(f"{path!r} not found in {repo}@{ref}")
-    if out.lstrip().startswith("["):
-        raise ValueError(f"{path!r} is a directory in {repo}@{ref}, not a file")
     return out
 
 
