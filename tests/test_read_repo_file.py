@@ -97,3 +97,20 @@ def test_read_repo_file_bracket_leading_file_is_not_a_directory(
         "warni001/agent-crew", "data.json"
     ) == '[{"a": 1}]\n'
     assert len(calls) == 2
+
+
+def test_run_raw_stdout_preserves_crlf_and_cr(tools_mod):
+    """_run with raw_stdout=True preserves CRLF and lone CR: text
+    mode normalizes them to LF unless newline='' is passed, so this
+    runs a real subprocess (not a mocked stdout string) — a mock
+    would never exercise the decoding."""
+    import sys
+
+    out = tools_mod._run(
+        [
+            sys.executable, "-c",
+            "import sys; sys.stdout.buffer.write(b'a\\r\\nb\\rc\\n')",
+        ],
+        raw_stdout=True,
+    )
+    assert out == "a\r\nb\rc\n"

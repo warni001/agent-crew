@@ -56,17 +56,20 @@ def _run(
     reads GH_TOKEN from the environment itself. By default return
     stripped stdout and stderr, bounded by `max_output`. For file
     reads, `raw_stdout` returns stdout without stripping or truncating.
+
+    The run is binary and the output is decoded by hand: text mode
+    (`text=True`) normalizes CRLF and lone CR to LF, so a raw read
+    would silently lose the file's real line endings. Decoding bytes
+    directly preserves them.
     """
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
-        )
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         message = f"command timed out after {timeout}s: {cmd[0]}"
         logging.getLogger("crew.tools").warning("command failed: %s", message)
         raise RuntimeError(message) from None
     if proc.returncode != 0:
-        out = (proc.stdout + proc.stderr).strip()
+        out = _decode(proc.stdout + proc.stderr).strip()
         # Log the failure here, with the command and its output: the
         # framework catches this exception and hands the model a
         # generic "Error: Function failed." (unless detailed errors
@@ -80,9 +83,21 @@ def _run(
         logging.getLogger("crew.tools").warning("command failed: %s", message)
         raise RuntimeError(message)
     if raw_stdout:
-        return proc.stdout
-    out = (proc.stdout + proc.stderr).strip()
+        return _decode(proc.stdout)
+    out = _decode(proc.stdout + proc.stderr).strip()
     return out if max_output is None else out[:max_output]
+
+
+def _decode(data: bytes | str) -> str:
+    """Decode subprocess output without newline translation.
+
+    `surrogateescape` keeps non-UTF-8 bytes round-trippable instead
+    of raising on a binary file. A str passes through unchanged
+    (tests mock subprocess.run with str stdout).
+    """
+    if isinstance(data, str):
+        return data
+    return data.decode("utf-8", errors="surrogateescape")
 
 
 ALLOWED_REPOS = frozenset({ALLOWED_REPO})
@@ -128,6 +143,11 @@ def _inside_repo(path: str) -> Path:
     if not target.is_relative_to(_repo_root()):
         raise ValueError(f"refusing path outside the repo checkout: {path!r}")
     return target
+
+
+# Cap for a single file read: ~100KB of source. Bounds a pathological
+# read while covering every file in this repo with room to spare.
+_READ_MAX_OUTPUT = 100_000
 
 
 def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
@@ -247,7 +267,7 @@ def read_pr(repo: str, pr_number: int) -> str:
     ])
     diff = _run(
         ["gh", "pr", "diff", str(pr_number), "--repo", repo],
-        raw_stdout=True,
+        max_output=_READ_MAX_OUTPUT,
     )
     return f"{header}\n\nDiff:\n{diff}"
 
