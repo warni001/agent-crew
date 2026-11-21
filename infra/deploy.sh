@@ -131,6 +131,16 @@ if [ -z "${CLAUDE_ORGANIZATION_NAME:-}" ]; then
 fi
 
 echo "Deploying infra/main.bicep ..."
+# Resolve the deploy SP's object ID for the ledger read grant. The
+# template's deployServicePrincipalId param is the object ID, not the
+# app ID. Exported as DEPLOY_SP_OID so main.bicepparam can read it.
+# Empty means no assignment is created (the rollback watch exits loud).
+DEPLOY_SP_OID=""
+DEPLOY_SP_APP_ID="$(az ad sp list --display-name "$DEPLOY_SP_NAME" --query "[0].appId" -o tsv)"
+if [ -n "$DEPLOY_SP_APP_ID" ]; then
+  DEPLOY_SP_OID="$(az ad sp show --id "$DEPLOY_SP_APP_ID" --query id -o tsv || true)"
+  export DEPLOY_SP_OID
+fi
 RESULT="$(az deployment group create \
   --resource-group "$RESOURCE_GROUP" \
   --template-file main.bicep \

@@ -20,3 +20,8 @@ param claudeModelVersion = '1'
 param claudeOrganizationName = readEnvironmentVariable('CLAUDE_ORGANIZATION_NAME', '')
 param claudeCountryCode = readEnvironmentVariable('CLAUDE_COUNTRY_CODE', 'US')
 param claudeIndustry = readEnvironmentVariable('CLAUDE_INDUSTRY', 'technology')
+
+// Object ID of the deploy service principal, for the ledger Storage
+// Blob Data Reader grant (rollback watch). deploy.sh exports it as
+// DEPLOY_SP_OID. Empty means no assignment is created.
+param deployServicePrincipalId = readEnvironmentVariable('DEPLOY_SP_OID', '')
