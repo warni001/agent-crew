@@ -165,6 +165,8 @@ jobs:
       # Exit 2 (cannot verify, e.g. the deploy SP has no Storage Blob
       # Data Reader yet) also fails the job, but rolls nothing back.
       - name: Watch the new revision, roll back if unhealthy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SHORT_SHA="${GITHUB_SHA:0:7}"
           python3 scripts/rollback_watch.py \
