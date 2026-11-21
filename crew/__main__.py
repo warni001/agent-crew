@@ -205,13 +205,16 @@ def run_one_task(
 
     The reviewer is the gate: after the workflow finishes, the run
     settles as stalled — not finished — when the reviewer requested
-    changes, no review was recorded, or the sign-off ledger could
-    not be read. A run that records
+    changes and nothing was approved, when no review was recorded,
+    or when the sign-off ledger could not be read. A run that records
     task_finished with zero PRs is the Nov 19 hollow-done mistake;
     the gate exists to stop it repeating. An approved sign-off is
-    what lets a run finish. `issue_number` is the original task
-    issue, when the task came from one: a stalled run comments on it
-    and tags it stalled, in addition to posting the stalled issue.
+    what lets a run finish. A changes_requested on one PR is a
+    per-PR blocker, not a task blocker: a sweep that approved (and
+    merged) other PRs finishes, and the blocked PRs stay open for a
+    later task. `issue_number` is the original task issue, when the
+    task came from one: a stalled run comments on it and tags it
+    stalled, in addition to posting the stalled issue.
     """
     log = logging.getLogger("crew")
     _record(ledger, "task_started", task=task, repo=config.repo)
@@ -235,23 +238,47 @@ def run_one_task(
     # produced nothing — this is the fix for that.
     sign_offs = _sign_offs_since(config, before) if before is not None else None
     summary = format_run_summary(outputs, sign_offs)
-    reason = None
     if sign_offs is None:
-        reason = "review_unavailable"
-    elif any(s.get("verdict") == "changes_requested" for s in sign_offs):
-        reason = "review"
-    elif not sign_offs:
-        reason = "no_review"
-
-    if reason is not None:
-        _record(ledger, "task_stalled", task=task, reason=reason)
-        log.warning("task stalled (%s):\n%s", reason, summary)
+        # The sign-off ledger could not be read, so no approval can
+        # be verified: stall rather than finishing without one.
+        _record(ledger, "task_stalled", task=task, reason="review_unavailable")
+        log.warning("task stalled (review sign-offs unavailable):\n%s", summary)
         try:
-            url = report_stalled(config.repo, task, summary, reason=reason)
+            url = report_stalled(
+                config.repo, task, summary, reason="review_unavailable"
+            )
             log.info("stalled issue posted: %s", url)
         except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
             print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
-        _mark_task_stalled(config, issue_number, reason, summary)
+        _mark_task_stalled(config, issue_number, "review_unavailable", summary)
+        return 1
+    requested = [
+        s for s in sign_offs if s.get("verdict") == "changes_requested"
+    ]
+    approved = [s for s in sign_offs if s.get("verdict") == "approved"]
+    # A changes_requested stalls the task only when nothing was
+    # approved in the run. A sweep that approved (and merged)
+    # some PRs finishes; the blocked PRs are per-PR blockers,
+    # not task blockers, and stay open for a later task.
+    if requested and not approved:
+        _record(ledger, "task_stalled", task=task, reason="review")
+        log.warning("task stalled (reviewer requested changes):\n%s", summary)
+        try:
+            url = report_stalled(config.repo, task, summary, reason="review")
+            log.info("stalled issue posted: %s", url)
+        except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+            print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+        _mark_task_stalled(config, issue_number, "review", summary)
+        return 1
+    if not sign_offs:
+        _record(ledger, "task_stalled", task=task, reason="no_review")
+        log.warning("task stalled (no review recorded):\n%s", summary)
+        try:
+            url = report_stalled(config.repo, task, summary, reason="no_review")
+            log.info("stalled issue posted: %s", url)
+        except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+            print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+        _mark_task_stalled(config, issue_number, "no_review", summary)
         return 1
     _record(ledger, "task_finished", task=task, outputs=outputs)
     log.info("task finished:\n%s", summary)

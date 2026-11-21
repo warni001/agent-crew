@@ -63,16 +63,21 @@ the planner named one, fetch it and compare its diff against main
 branch holds the change, verify it is based on current main, its diff
 is the described change and not already merged, and no equivalent PR
 is already open (list_open_prs) — then open the PR from that branch
-instead of creating a new one. If the branch is missing, stale, or
-already merged, say so and create a fresh branch as usual: work on a
-new branch (git checkout -b <short-name>), commit your change, push
-the branch, then open the PR with open_pr only after tests pass. Run
-the test suite with run_pytest before opening a PR — if tests fail,
-fix them; never open a PR on red. Your response is the reviewer's
-only context: name the PR number and what changed in it. {_SCOPE}
+instead of creating a new one. If a PR is already open on that branch
+and the branch is behind current main, update the existing branch
+from main and push the updated branch, so CI runs on the new head;
+do not create a fresh branch for a PR that already exists. A local
+update that is never pushed creates no new head and does not count.
+If the branch is missing, stale with no open PR, or already merged,
+say so and create a fresh branch as usual: work on a new branch
+(git checkout -b <short-name>), commit your change, push the branch,
+then open the PR with open_pr only after tests pass. Run the test
+suite with run_pytest before opening a PR — if tests fail, fix them;
+never open a PR on red. Your response is the reviewer's only
+context: name the PR number and what changed in it. {_SCOPE}
 {_VOICE}"""
 
-_REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Check the diff against
+_REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Read the PR's description and diff with read_pr first — that is how you see what changed and what the author claims. Check the diff against
 the Ponytail checklist below, verify tests passed, and verify nothing
 outside the task scope crept in. Record your verdict with
 record_sign_off (verdict 'approved' or 'changes_requested', with notes).

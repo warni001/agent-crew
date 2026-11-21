@@ -22,9 +22,11 @@ without sign-off.
 
 1. **Tests green.** `pytest` offline, mocked chat/`gh`. Failed
    tests do not push, and do not merge.
-2. **Reviewer sign-off.** At least one review with role `reviewer`
-   and `approved: true`. Builder, Planner, or Merger approval does
-   not open the gate. A Reviewer rejection keeps the gate closed.
+2. **Reviewer sign-off.** `merge_pr` requires the latest reviewer ledger
+   verdict for that PR to be `approved`. A later `changes_requested`
+   verdict supersedes an earlier approval. No sign-off, an unreadable
+   ledger, or approval for another PR leaves the gate closed.
+   This check does not replace the separate CI gate.
 3. **Ponytail check.** The Reviewer checks the PR against
    `ponytail.md`: first rung that works, no abstraction for later,
    one small test for non-trivial logic, shortcuts marked
@@ -230,10 +232,19 @@ in the same PR.
 
 ## How to run locally
 
+Set up Python 3.14 and install the same dependencies as CI. This step
+may need network access to download packages.
+
 ```bash
 python3.14 -m venv .venv
-.venv/bin/pip install pytest
-.venv/bin/python -m pytest tests/ -v
+.venv/bin/pip install -r requirements.txt pytest==9.2.0
+```
+
+Run the tests offline from the repo root. You do not need Azure or GitHub
+credentials.
+
+```bash
+.venv/bin/python -m pytest
 ```
 
 Tests run offline: chat clients and the `gh` CLI are mocked.
