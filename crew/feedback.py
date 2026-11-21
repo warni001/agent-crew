@@ -256,7 +256,8 @@ def stalled_issue_payload(task: str, summary: str, reason: str = "cap") -> dict:
     round/reset cap — kept for callers that still pass it), "review"
     (the reviewer requested changes; the summary carries the review
     notes), or "no_review" (no PR was opened and no review recorded,
-    so nothing shipped). The body always says the task is not done.
+    so nothing shipped), or "review_unavailable" (the sign-off ledger
+    could not be read). The body always says the task is not done.
     """
     if not task:
         raise ValueError("task must not be empty")
@@ -273,6 +274,12 @@ def stalled_issue_payload(task: str, summary: str, reason: str = "cap") -> dict:
             "No PR was opened and no review was recorded, so nothing "
             "shipped and this task is not done. It is not retried "
             "automatically. Re-queue it with a refined crew-task issue."
+        )
+    elif reason == "review_unavailable":
+        why = (
+            "The sign-off ledger could not be read, so the review status "
+            "is unknown and this task is not marked done. Check the ledger "
+            "and any PR from this run before re-queuing the task."
         )
     else:
         why = (
