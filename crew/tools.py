@@ -138,8 +138,26 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
     failed with 'Incorrect padding' and the crew could not read its
     own larger files (tools.py, roles.py, config.py). A 404 is a
     FileNotFoundError; a directory path is a ValueError.
+
+    The directory check reads the path's type from repository
+    metadata, not from the content: a file's content can legitimately
+    start with `[` (a JSON array, a bracket-led line), so guessing
+    "directory" from the content misreads real files. A directory's
+    contents listing is a JSON array, which the jq reports as "dir";
+    a file's metadata has type "file".
     """
     _check_repo(repo)
+    try:
+        kind = _run([
+            "gh", "api", f"repos/{repo}/contents/{path}?ref={ref}",
+            "--jq", 'if type == "array" then "dir" else .type end',
+        ])
+    except RuntimeError as exc:
+        if "404" in str(exc):
+            raise FileNotFoundError(f"{path!r} not found in {repo}@{ref}") from exc
+        raise
+    if kind.strip() == "dir":
+        raise ValueError(f"{path!r} is a directory in {repo}@{ref}, not a file")
     try:
         out = _run(
             ["gh", "api", "-H", "Accept: application/vnd.github.raw",
@@ -150,8 +168,6 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
         if "404" in str(exc):
             raise FileNotFoundError(f"{path!r} not found in {repo}@{ref}") from exc
         raise
-    if out.lstrip().startswith("["):
-        raise ValueError(f"{path!r} is a directory in {repo}@{ref}, not a file")
     return out
 
 
@@ -225,7 +241,7 @@ def read_pr(repo: str, pr_number: int) -> str:
     ])
     diff = _run(
         ["gh", "pr", "diff", str(pr_number), "--repo", repo],
-        max_output=_READ_MAX_OUTPUT,
+        raw_stdout=True,
     )
     return f"{header}\n\nDiff:\n{diff}"
 
