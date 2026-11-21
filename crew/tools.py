@@ -57,13 +57,16 @@ def _run(
     stripped stdout and stderr, bounded by `max_output`. For file
     reads, `raw_stdout` returns stdout without stripping or truncating.
 
-    The run is binary and the output is decoded by hand: text mode
-    (`text=True`) normalizes CRLF and lone CR to LF, so a raw read
-    would silently lose the file's real line endings. Decoding bytes
-    directly preserves them.
+    The run is binary only for raw reads: text mode (`text=True`)
+    normalizes CRLF and lone CR to LF, so a raw read would silently
+    lose the file's real line endings. Ordinary commands keep text
+    mode, so their diagnostics behave exactly as before. Raw bytes
+    are decoded by hand below.
     """
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=not raw_stdout, timeout=timeout
+        )
     except subprocess.TimeoutExpired:
         message = f"command timed out after {timeout}s: {cmd[0]}"
         logging.getLogger("crew.tools").warning("command failed: %s", message)

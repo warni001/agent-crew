@@ -101,16 +101,16 @@ def test_read_repo_file_bracket_leading_file_is_not_a_directory(
 
 def test_run_raw_stdout_preserves_crlf_and_cr(tools_mod):
     """_run with raw_stdout=True preserves CRLF and lone CR: text
-    mode normalizes them to LF unless newline='' is passed, so this
+    mode normalizes them to LF unless the run is binary, so this
     runs a real subprocess (not a mocked stdout string) — a mock
-    would never exercise the decoding."""
+    would never exercise the decoding. The paired default-mode call
+    keeps the previous text-mode behavior: ordinary output still
+    normalizes CRLF/CR to LF."""
     import sys
 
-    out = tools_mod._run(
-        [
-            sys.executable, "-c",
-            "import sys; sys.stdout.buffer.write(b'a\\r\\nb\\rc\\n')",
-        ],
-        raw_stdout=True,
-    )
-    assert out == "a\r\nb\rc\n"
+    cmd = [
+        sys.executable, "-c",
+        "import sys; sys.stdout.buffer.write(b'a\\r\\nb\\rc\\n')",
+    ]
+    assert tools_mod._run(cmd, raw_stdout=True) == "a\r\nb\rc\n"
+    assert tools_mod._run(cmd) == "a\nb\nc"
