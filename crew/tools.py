@@ -157,6 +157,57 @@ def read_repo_file(repo: str, path: str, ref: str = "main") -> str:
     return out
 
 
+def list_branches(repo: str) -> str:
+    """List all branch names in the repo, one per line.
+
+    The planner and builder use this to check whether a branch already
+    contains a change before creating a fresh one — a duplicate branch
+    is how the Round 4 run rebuilt three changes that already existed
+    on round4-merge-signoff, round4-report-opened-pr, and
+    round4-readme-status.
+    """
+    _check_repo(repo)
+    # A truncated listing can hide an existing branch and duplicate work.
+    return _run(
+        ["gh", "api", f"repos/{repo}/branches", "--paginate", "--jq", ".[].name"],
+        max_output=None,
+    )
+
+
+def list_open_prs(repo: str, head: str = "") -> str:
+    """List open pull requests as JSON (number, title, head branch).
+
+    With `head`, only PRs from that branch. The builder uses this to
+    check that no equivalent PR is already open before opening one
+    from an existing branch. `gh` is not in run_shell's allowlist,
+    so this check cannot be done with run_shell — it needs a tool.
+    """
+    _check_repo(repo)
+    cmd = [
+        "gh", "pr", "list", "--repo", repo, "--state", "open",
+        "--json", "number,title,headRefName",
+    ]
+    if head:
+        cmd += ["--head", head]
+    return _run(cmd)
+
+
+def pr_checks(repo: str, pr_number: int) -> str:
+    """Report GitHub CI check status for a pull request, with its head SHA.
+
+    Returns JSON with the PR head SHA and each check's name, status,
+    and conclusion, so the caller can confirm CI is green on the exact
+    head SHA before merging. `gh` is not in run_shell's allowlist,
+    so this check cannot be done with run_shell — it needs a tool.
+    """
+    _check_repo(repo)
+    return _run([
+        "gh", "pr", "view", str(pr_number), "--repo", repo,
+        "--json", "headRefOid,statusCheckRollup",
+        "--jq", "{head: .headRefOid, checks: [(.statusCheckRollup // [])[] | {name: .name, status: .status, conclusion: .conclusion}]}",
+    ])
+
+
 def open_pr(repo: str, title: str, body: str, head: str, base: str = "main") -> str:
     """Open a pull request. Returns the PR URL. Call only after tests pass."""
     _check_repo(repo)
@@ -175,9 +226,14 @@ def comment_on_pr(repo: str, pr_number: int, body: str) -> str:
 
 
 def merge_pr(repo: str, pr_number: int) -> str:
-    """Merge a pull request (gh default merge). Only after reviewer sign-off."""
+    """Merge a pull request (gh default merge). Only after reviewer sign-off.
+
+    gh requires an explicit strategy in non-interactive mode, so --merge
+    is passed (the merge commit, gh's default); without it the command
+    fails and an approved PR never merges.
+    """
     _check_repo(repo)
-    return _run(["gh", "pr", "merge", str(pr_number), "--repo", repo])
+    return _run(["gh", "pr", "merge", str(pr_number), "--merge", "--repo", repo])
 
 
 def record_sign_off(pr_number: int, verdict: str, notes: str = "") -> str:
@@ -262,27 +318,31 @@ def run_shell(command: str) -> str:
 # the instruction to check before acting looped forever, each check
 # re-sending full history as prompt tokens, and repeated checks
 # preceded a 400 about a missing tool call.
-READ_TOOLS = [tool(f) for f in (read_repo_file, read_file)]
+READ_TOOLS = [tool(f) for f in (
+    read_repo_file, read_file, list_branches, list_open_prs,
+)]
 BUILD_TOOLS = [tool(f) for f in (
     read_repo_file, read_file, write_file, run_pytest, run_shell,
-    open_pr,
+    open_pr, list_branches, list_open_prs, pr_checks,
 )]
 REVIEW_TOOLS = [tool(f) for f in (
-    read_repo_file, read_file, comment_on_pr, record_sign_off,
+    read_repo_file, read_file, comment_on_pr, record_sign_off, pr_checks,
 )]
 MERGE_TOOLS = [tool(f) for f in (
-    merge_pr, comment_on_pr, check_review_sign_off,
+    merge_pr, comment_on_pr, check_review_sign_off, pr_checks,
 )]
 ALL_TOOLS = [tool(f) for f in (
     read_repo_file, open_pr, comment_on_pr, merge_pr,
     read_file, write_file, run_pytest, run_shell,
     record_sign_off, check_review_sign_off,
+    list_branches, list_open_prs, pr_checks,
 )]
 
 __all__ = [
     "read_repo_file", "open_pr", "comment_on_pr", "merge_pr",
     "read_file", "write_file", "run_pytest", "run_shell",
     "record_sign_off", "check_review_sign_off",
+    "list_branches", "list_open_prs", "pr_checks",
     "ALLOWED_REPOS", "GHCR_IMAGE", "image_for_commit", "assert_repo_allowed",
     "READ_TOOLS", "BUILD_TOOLS", "REVIEW_TOOLS", "MERGE_TOOLS", "ALL_TOOLS",
 ]
