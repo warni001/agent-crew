@@ -74,6 +74,18 @@ def test_read_repo_file_directory_is_value_error(tools_mod, monkeypatch):
         tools_mod.read_repo_file("warni001/agent-crew", "crew")
 
 
+def test_read_repo_file_directory_with_stderr_warning_is_value_error(
+    tools_mod, monkeypatch
+):
+    """A successful `dir` metadata response accompanied by a stderr
+    warning is still a directory: the check reads stdout alone, so
+    the warning cannot corrupt the comparison."""
+    calls = _fake_run(monkeypatch, ["dir"], stderr="gh: warning\n")
+    with pytest.raises(ValueError, match="is a directory"):
+        tools_mod.read_repo_file("warni001/agent-crew", "crew")
+    assert len(calls) == 1
+
+
 def test_read_repo_file_bracket_leading_file_is_not_a_directory(
     tools_mod, monkeypatch
 ):

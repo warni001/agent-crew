@@ -48,5 +48,13 @@ class Ledger:
         """Reviewer sign-off entries, optionally for one PR."""
         rows = [e for e in self.entries() if e.get("event") == "review_sign_off"]
         if pr_number is not None:
-            rows = [e for e in rows if e.get("pr_number") == pr_number]
+            # A stored pr_number must be an actual integer to match:
+            # a JSON `true` compares equal to 1 in Python (bool is an
+            # int subclass), so a malformed approval with
+            # pr_number: true would otherwise count for PR #1.
+            rows = [
+                e for e in rows
+                if type(e.get("pr_number")) is int
+                and e["pr_number"] == pr_number
+            ]
         return rows
