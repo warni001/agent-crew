@@ -79,6 +79,18 @@ def test_stalled_payload_review_reason(feedback_mod):
     assert "round/reset cap" not in payload["body"]
 
 
+def test_long_task_title_truncated_to_github_cap(feedback_mod):
+    """A title built from a long task fits GitHub's 256-char cap;
+    a short title is unchanged (see test_stalled_payload_review_reason)."""
+    long_task = "Merge the approved open PRs\n\n" + "x" * 500
+    payload = feedback_mod.stalled_issue_payload(long_task, "hit the cap")
+    assert len(payload["title"]) == 256
+    assert payload["title"].startswith("[crew] Stalled: Merge the approved")
+    done = feedback_mod.done_issue_payload(long_task, "finished")
+    assert len(done["title"]) == 256
+    assert done["title"].startswith("[crew] Done: Merge the approved")
+
+
 def test_stalled_payload_no_review_reason(feedback_mod):
     payload = feedback_mod.stalled_issue_payload(
         "Fix X", "merged nothing", reason="no_review"

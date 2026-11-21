@@ -33,6 +33,19 @@ DONE_TITLE_PREFIX = "[crew] Done: "
 STALLED_TITLE_PREFIX = "[crew] Stalled: "
 
 
+# GitHub caps issue titles at 256 characters. The task string is the
+# full issue title plus body, so a stalled/done title built from it
+# blows past the cap and `gh issue create` fails with a GraphQL
+# error ("Title is too long"). Truncate the title to the cap; the
+# body still carries the full task text.
+GITHUB_TITLE_MAX_LENGTH = 256
+
+
+def _issue_title(prefix: str, task: str) -> str:
+    """An issue title that fits GitHub's 256-character cap."""
+    return f"{prefix}{task}"[:GITHUB_TITLE_MAX_LENGTH]
+
+
 def task_text(title: str, body: str = "") -> str:
     """The task string for an issue: title, plus body when there is one.
 
@@ -232,7 +245,7 @@ def done_issue_payload(task: str, summary: str, pr_url: str = "") -> dict:
     if pr_url:
         lines += ["", f"PR: {pr_url}"]
     return {
-        "title": f"[crew] Done: {task}",
+        "title": _issue_title(DONE_TITLE_PREFIX, task),
         "body": "\n".join(lines),
         "labels": ["done"],
     }
@@ -284,7 +297,7 @@ def stalled_issue_payload(task: str, summary: str, reason: str = "cap") -> dict:
         why,
     ]
     return {
-        "title": f"[crew] Stalled: {task}",
+        "title": _issue_title(STALLED_TITLE_PREFIX, task),
         "body": "\n".join(lines),
         "labels": ["stalled"],
     }

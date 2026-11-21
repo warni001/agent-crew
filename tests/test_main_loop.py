@@ -264,6 +264,34 @@ def test_changes_requested_sign_off_records_stalled(main_mod, config_mod, ledger
     done.assert_not_called()
 
 
+def test_changes_requested_plus_approved_finishes(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """A changes_requested on one PR does not stall a sweep that
+    approved another: per-PR blockers are not task blockers."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+
+    async def _run(workflow, task, config):
+        _record_sign_off(
+            ledger_mod, path, verdict="changes_requested",
+            pr_number=7, notes="fix the test",
+        )
+        _record_sign_off(
+            ledger_mod, path, verdict="approved", pr_number=8, notes="",
+        )
+        return ["merged PR #8"]
+
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "run_task", _run)
+    stalled = mock.Mock(return_value="https://example/2")
+    monkeypatch.setattr(main_mod, "report_stalled", stalled)
+    monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
+    assert main_mod.run_one_task(config, ledger, "do the thing") == 0
+    task_events = [e for e in ledger.entries() if e["event"].startswith("task_")]
+    assert [e["event"] for e in task_events] == ["task_started", "task_finished"]
+    stalled.assert_not_called()
+
+
 def test_no_sign_off_records_stalled(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
     """No review recorded means nothing shipped: the run stalls
     instead of claiming a finish with zero PRs (the Nov 19
