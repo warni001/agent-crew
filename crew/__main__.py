@@ -206,13 +206,17 @@ def run_one_task(
 
     The reviewer is the gate: after the workflow finishes, the run
     settles as stalled — not finished — when the reviewer requested
-    changes, or when no review was recorded at all (no PR opened, or
-    the reviewer never ran, so nothing shipped). A run that records
-    task_finished with zero PRs is the Nov 19 hollow-done mistake;
-    the gate exists to stop it repeating. An approved sign-off is
-    what lets a run finish. `issue_number` is the original task
-    issue, when the task came from one: a stalled run comments on it
-    and tags it stalled, in addition to posting the stalled issue.
+    changes and nothing was approved, or when no review was recorded
+    at all (no PR opened, or the reviewer never ran, so nothing
+    shipped). A run that records task_finished with zero PRs is the
+    Nov 19 hollow-done mistake; the gate exists to stop it repeating.
+    An approved sign-off is what lets a run finish. A
+    changes_requested on one PR is a per-PR blocker, not a task
+    blocker: a sweep that approved (and merged) other PRs finishes,
+    and the blocked PRs stay open for a later task. `issue_number`
+    is the original task issue, when the task came from one: a
+    stalled run comments on it and tags it stalled, in addition to
+    posting the stalled issue.
     """
     log = logging.getLogger("crew")
     _record(ledger, "task_started", task=task, repo=config.repo)
@@ -240,7 +244,12 @@ def run_one_task(
         requested = [
             s for s in sign_offs if s.get("verdict") == "changes_requested"
         ]
-        if requested:
+        approved = [s for s in sign_offs if s.get("verdict") == "approved"]
+        # A changes_requested stalls the task only when nothing was
+        # approved in the run. A sweep that approved (and merged)
+        # some PRs finishes; the blocked PRs are per-PR blockers,
+        # not task blockers, and stay open for a later task.
+        if requested and not approved:
             _record(ledger, "task_stalled", task=task, reason="review")
             log.warning("task stalled (reviewer requested changes):\n%s", summary)
             try:
