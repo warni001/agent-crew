@@ -89,3 +89,18 @@ def test_merge_without_ledger_does_not_call_gh(monkeypatch, tmp_path, mock_gh):
     with pytest.raises(RuntimeError, match="no reviewer sign-off recorded"):
         tools.merge_pr("warni001/agent-crew", 42)
     assert mock_gh == []
+
+
+def test_boolean_pr_number_does_not_match_pr_1(monkeypatch, tmp_path, mock_gh):
+    """A malformed approval with pr_number true must not count for
+    PR #1: True == 1 in Python, so a plain equality match would let
+    it through the merge gate."""
+    repo = "warni001/agent-crew"
+    path = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("CREW_LEDGER_PATH", str(path))
+    Ledger(path).record("review_sign_off", pr_number=True, verdict="approved")
+    status = tools.check_review_sign_off(1)
+    assert status.startswith("NO:") and "no reviewer sign-off recorded" in status
+    with pytest.raises(RuntimeError, match="no reviewer sign-off recorded"):
+        tools.merge_pr(repo, 1)
+    assert mock_gh == []
