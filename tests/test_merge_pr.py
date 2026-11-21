@@ -1,9 +1,52 @@
-"""The merge action and status check agree on the latest reviewer sign-off."""
+"""merge_pr must pass an explicit merge strategy to gh, and must agree
+with the latest reviewer sign-off.
+
+Regression (Nov 20, 2026): the merger had an approved PR (#36) but
+could not merge it — `gh pr merge` in non-interactive mode requires
+an explicit --merge / --rebase / --squash flag, and merge_pr passed
+none, so the command failed and the PR stayed open.
+
+The merge action and status check also agree on the latest reviewer
+sign-off: a newer rejection blocks the merge even when an earlier
+approval exists, and a missing or unreadable ledger blocks it too.
+"""
+
+from __future__ import annotations
+
+from unittest import mock
 
 import pytest
+from conftest import require_crew
 
 from crew import tools
 from crew.ledger import Ledger
+
+
+def _fake_run(monkeypatch, calls):
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(list(cmd))
+        result = mock.Mock()
+        result.returncode = 0
+        result.stdout = "Merged pull request #36"
+        result.stderr = ""
+        return result
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+
+def test_merge_pr_passes_explicit_merge_strategy(monkeypatch, tmp_path):
+    tools_mod = require_crew("tools")
+    # merge_pr refuses without an approved latest sign-off, so record
+    # one for PR #36 first; the test is about the gh call, not gating.
+    path = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("CREW_LEDGER_PATH", str(path))
+    Ledger(path).record("review_sign_off", pr_number=36, verdict="approved")
+    calls: list[list[str]] = []
+    _fake_run(monkeypatch, calls)
+    tools_mod.merge_pr("warni001/agent-crew", 36)
+    assert calls == [
+        ["gh", "pr", "merge", "36", "--merge", "--repo", "warni001/agent-crew"]
+    ]
 
 
 @pytest.mark.parametrize(
@@ -38,7 +81,7 @@ def test_merge_requires_latest_approval_for_requested_pr(
     else:
         assert status.startswith("YES:")
         assert tools.merge_pr(repo, 42) == "{}"
-        assert mock_gh == [["gh", "pr", "merge", "42", "--repo", repo]]
+        assert mock_gh == [["gh", "pr", "merge", "42", "--merge", "--repo", repo]]
 
 
 def test_merge_without_ledger_does_not_call_gh(monkeypatch, tmp_path, mock_gh):
