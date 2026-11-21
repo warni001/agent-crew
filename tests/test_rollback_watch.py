@@ -79,16 +79,69 @@ def test_replica_running_needs_a_running_replica(rw):
 
 
 @pytest.mark.parametrize(
-    "running,heartbeat,expected",
+    "running,heartbeat,queued,expected",
     [
-        (True, True, "healthy"),
-        (False, True, "crash-loop"),
-        (False, False, "crash-loop"),
-        (True, False, "silent"),
+        (True, True, True, "healthy"),
+        (True, True, False, "healthy"),
+        (False, True, True, "crash-loop"),
+        (False, False, True, "crash-loop"),
+        (True, False, True, "silent"),
+        # Idle loop: running, no heartbeat, nothing queued — healthy,
+        # not silent. This is the Nov 21 e9fb0a4 rollback: the crew
+        # had no task (its only task was settled in the ledger), so
+        # no heartbeat, and the old watch rolled back a good deploy.
+        (True, False, False, "healthy"),
     ],
 )
-def test_decide_matrix(rw, running, heartbeat, expected):
-    assert rw.decide(running, heartbeat) == expected
+def test_decide_matrix(rw, running, heartbeat, queued, expected):
+    assert rw.decide(running, heartbeat, queued) == expected
+
+
+def test_decide_defaults_to_queued(rw):
+    # Callers that do not pass queued keep the old strict behaviour.
+    assert rw.decide(True, False) == "silent"
+    assert rw.decide(True, True) == "healthy"
+
+
+def test_has_queued_task_default_task_unsettled(rw):
+    # Empty ledger, no Done issues: the default task is queued.
+    runner = FakeRunner()
+    assert rw.has_queued_task(runner, "warni001/agent-crew", [])
+
+
+def test_has_queued_task_idle_when_default_settled_and_no_open_tasks(rw):
+    # Default task covered by a Done issue, no open crew-task issues:
+    # nothing queued, an idle loop is healthy.
+    done = json.dumps([{"title": "[crew] Done: " + rw.DEFAULT_TASK}])
+    runner = FakeRunner(done_issues_json=done)
+    assert not rw.has_queued_task(runner, "warni001/agent-crew", [])
+
+
+def test_has_queued_task_open_unsettled_issue_is_queued(rw):
+    done = json.dumps([{"title": "[crew] Done: " + rw.DEFAULT_TASK}])
+    task = json.dumps([{
+        "number": 48, "title": "Merge the approved open PRs",
+        "body": "Several PRs are open.",
+    }])
+    runner = FakeRunner(done_issues_json=done, task_issues_json=task)
+    assert rw.has_queued_task(runner, "warni001/agent-crew", [])
+
+
+def test_has_queued_task_settled_issue_is_not_queued(rw):
+    # The issue's task text is in the ledger as stalled: settled,
+    # even though the issue is still open and crew-task labelled.
+    # Removing the label alone does not re-queue it; refining the
+    # issue (changing the task text) does.
+    done = json.dumps([{"title": "[crew] Done: " + rw.DEFAULT_TASK}])
+    task = json.dumps([{
+        "number": 48, "title": "Merge the approved open PRs",
+        "body": "Several PRs are open.",
+    }])
+    task_text = "Merge the approved open PRs\n\nSeveral PRs are open."
+    ledger = _ledger({"event": "task_stalled", "task": task_text, "ts": "2026-11-21T17:39:08+00:00"})
+    runner = FakeRunner(done_issues_json=done, task_issues_json=task)
+    entries = [json.loads(line) for line in ledger.splitlines() if line.strip()]
+    assert not rw.has_queued_task(runner, "warni001/agent-crew", entries)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +162,9 @@ class FakeClock:
 
 class FakeRunner:
     """Canned az responses; records every command. The blob download
-    writes the canned ledger text to the --file path, like the real az."""
+    writes the canned ledger text to the --file path, like the real az.
+    Also answers `gh issue list` for the queued-task check: done
+    issues and open crew-task issues, as JSON."""
 
     def __init__(
         self,
@@ -118,12 +173,16 @@ class FakeRunner:
         created: str = "2026-11-20T06:34:02+00:00",
         blob_url: str = "https://stexample.blob.core.windows.net/ledger/crew-ledger.jsonl",
         fail_on: tuple[str, ...] = (),
+        done_issues_json: str = "[]",
+        task_issues_json: str = "[]",
     ):
         self.replica_states = replica_states
         self.ledger_text = ledger_text
         self.created = created
         self.blob_url = blob_url
         self.fail_on = fail_on
+        self.done_issues_json = done_issues_json
+        self.task_issues_json = task_issues_json
         self.commands: list[list[str]] = []
 
     def __call__(self, cmd: list[str]) -> str:
@@ -144,6 +203,10 @@ class FakeRunner:
             return ""
         if "revision activate" in joined or "revision deactivate" in joined:
             return ""
+        if "issue list" in joined and "--search" in joined:
+            return self.done_issues_json
+        if "issue list" in joined and "--label" in joined:
+            return self.task_issues_json
         raise AssertionError(f"unexpected command: {joined}")
 
     def rollback_commands(self) -> list[list[str]]:
@@ -199,12 +262,32 @@ def test_watch_crash_loop_rolls_back(rw):
 def test_watch_silent_rolls_back(rw):
     clock = FakeClock(_ts(6, 35, 0))
     # Running replica, but the only ledger event predates the revision.
+    # The default task is unsettled, so work is queued: silence means
+    # the loop is not doing it, roll back.
     runner = FakeRunner(
         replica_states="Running",
         ledger_text=_ledger(_entry("task_started", _ts(6, 33, 0))),
     )
     assert _watch(rw, runner, clock) == rw.EXIT_ROLLED_BACK
     assert len(runner.rollback_commands()) == 2
+
+
+def test_watch_idle_with_no_queued_task_is_healthy(rw):
+    # Running replica, no heartbeat, but nothing is queued: the default
+    # task is covered by a Done issue and no crew-task issue is open.
+    # An idle loop is healthy, not silent — no rollback. This is the
+    # Nov 21 e9fb0a4 case, where the old watch rolled back a good
+    # deploy because the crew's only task was settled in the ledger.
+    clock = FakeClock(_ts(6, 35, 0))
+    done = json.dumps([{"title": "[crew] Done: " + rw.DEFAULT_TASK}])
+    runner = FakeRunner(
+        replica_states="Running",
+        ledger_text="",
+        done_issues_json=done,
+        task_issues_json="[]",
+    )
+    assert _watch(rw, runner, clock) == rw.EXIT_HEALTHY
+    assert runner.rollback_commands() == []
 
 
 def test_watch_late_heartbeat_recovers(rw):

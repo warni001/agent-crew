@@ -8,13 +8,18 @@ it watches the new revision and, if the revision crash-loops or goes
 silent, reactivates the previous (last good) revision and deactivates
 the new one, then fails the workflow loudly so the rollback is visible.
 
-Health needs BOTH signals:
+Health needs BOTH signals, unless nothing is queued:
 - a replica of the new revision is Running (a crash-looping revision
   never holds a running replica), and
 - a ledger heartbeat: a task_started, task_finished, or spend event
   in the blob ledger timestamped at or after the new revision was
   created. The loop writes task_started at the start of every run, so
   a live loop writes within ~2 minutes of replica start.
+- When no task is queued (the default task is settled and no open
+  crew-task issue has an unsettled task string), a running replica
+  with no heartbeat is healthy, not silent — an idle loop is not a
+  broken one. Silence only rolls back when work is queued but the
+  loop is not doing it.
 
 Exit codes: 0 healthy (deploy stands), 1 unhealthy and rolled back,
 2 cannot verify (no previous revision to roll back to, or the ledger
@@ -33,10 +38,7 @@ Until then the watch fails loudly (exit 2) instead of rolling back.
 
 Limitations (shortcut: one level of rollback): if the previous
 revision is also bad, this does not help — a human still has to
-intervene. And if the task queue is empty at deploy time, a healthy
-loop writes no heartbeat, so the watch rolls back a good deploy;
-that is a loud failure, not a silent one, and the previous revision
-runs the same loop.
+intervene.
 """
 
 from __future__ import annotations
@@ -51,6 +53,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HEARTBEAT_EVENTS = frozenset({"task_started", "task_finished", "spend"})
+SETTLED_EVENTS = frozenset({"task_finished", "task_failed", "task_stalled"})
 
 EXIT_HEALTHY = 0
 EXIT_ROLLED_BACK = 1
@@ -58,8 +61,16 @@ EXIT_CANNOT_VERIFY = 2
 
 DEFAULT_RESOURCE_GROUP = "rg-agent-crew"
 DEFAULT_APP = "ca-agent-crew"
+DEFAULT_REPO = "warni001/agent-crew"
 DEFAULT_WATCH_SECONDS = 600  # 10 minutes: container startup plus a first task
 DEFAULT_POLL_SECONDS = 30
+
+TASK_LABEL = "crew-task"
+DONE_TITLE_PREFIX = "[crew] Done: "
+DEFAULT_TASK = (
+    "Build v1 of the crew system itself in this repo: improve the crew "
+    "package, tools, gates, and docs, opening a PR for each change."
+)
 
 
 def parse_ts(value: object) -> datetime | None:
@@ -91,12 +102,82 @@ def replica_running(states: list[str]) -> bool:
     return "Running" in states
 
 
-def decide(running: bool, heartbeat: bool) -> str:
-    """Health verdict: 'healthy', 'crash-loop', or 'silent'."""
+def task_text(title: str, body: str = "") -> str:
+    """The task string for an issue: title, plus body when there is one.
+
+    This exact string is what the crew runs and what lands in the
+    ledger, so the loop can tell a queued task from one already
+    settled. Must match crew/feedback.task_text.
+    """
+    title = title.strip()
+    body = (body or "").strip()
+    return f"{title}\n\n{body}" if body else title
+
+
+def settled_task_texts(entries: list[dict]) -> set[str]:
+    """Task strings the ledger says are finished, failed, or stalled."""
+    return {
+        str(e.get("task", ""))
+        for e in entries
+        if e.get("event") in SETTLED_EVENTS and e.get("task")
+    }
+
+
+def list_open_task_issues(runner, repo: str) -> list[dict]:
+    """Open issues labelled crew-task, with number/title/body."""
+    out = runner([
+        "gh", "issue", "list", "--repo", repo,
+        "--label", TASK_LABEL, "--state", "open",
+        "--limit", "100", "--json", "number,title,body",
+    ])
+    return json.loads(out)
+
+
+def list_done_task_texts(runner, repo: str) -> set[str]:
+    """Task strings that already have an open "[crew] Done:" issue."""
+    out = runner([
+        "gh", "issue", "list", "--repo", repo, "--state", "open",
+        "--search", DONE_TITLE_PREFIX, "--limit", "50", "--json", "title",
+    ])
+    done = set()
+    for row in json.loads(out):
+        title = row.get("title", "")
+        if title.startswith(DONE_TITLE_PREFIX):
+            done.add(title[len(DONE_TITLE_PREFIX):])
+    return done
+
+
+def has_queued_task(runner, repo: str, entries: list[dict]) -> bool:
+    """True if the crew has a task to pick up.
+
+    Mirrors the crew loop's selection: the default task if it is not
+    settled, else the oldest open crew-task issue whose task string
+    is not settled in the ledger or covered by a Done issue. No
+    queued task means an idle loop is healthy, not silent.
+    """
+    done = settled_task_texts(entries) | list_done_task_texts(runner, repo)
+    if DEFAULT_TASK not in done:
+        return True
+    for issue in list_open_task_issues(runner, repo):
+        if task_text(issue.get("title", ""), issue.get("body", "")) not in done:
+            return True
+    return False
+
+
+def decide(running: bool, heartbeat: bool, queued: bool = True) -> str:
+    """Health verdict: 'healthy', 'crash-loop', or 'silent'.
+
+    A running replica with no heartbeat is healthy when nothing is
+    queued (idle loop), silent only when work is queued but the loop
+    is not doing it. `queued` defaults to True so a caller that does
+    not know keeps the old strict behaviour.
+    """
     if running and heartbeat:
         return "healthy"
     if not running:
         return "crash-loop"
+    if not queued:
+        return "healthy"
     return "silent"
 
 
@@ -194,10 +275,13 @@ def watch(
     runner=_run,
     sleep=time.sleep,
     now=lambda: datetime.now(timezone.utc),
+    repo: str = DEFAULT_REPO,
 ) -> int:
     """Watch the new revision; roll back on crash-loop or silence.
 
     Returns an exit code: 0 healthy, 1 rolled back, 2 cannot verify.
+    A running replica with no heartbeat is healthy when nothing is
+    queued — an idle loop is not a silent one.
     """
     if not previous_revision or previous_revision == new_revision:
         print(
@@ -220,9 +304,9 @@ def watch(
             running = replica_running(
                 replica_states(runner, resource_group, app, new_revision)
             )
-            heartbeat = has_heartbeat(
-                ledger_entries(runner, blob_url), since
-            )
+            entries = ledger_entries(runner, blob_url)
+            heartbeat = has_heartbeat(entries, since)
+            queued = has_queued_task(runner, repo, entries)
         except RuntimeError as exc:
             # A failed read is not a signal either way: fail loudly
             # without rolling back. Rolling back on an unverifiable
@@ -230,9 +314,12 @@ def watch(
             # has no Storage Blob Data Reader yet).
             print(f"cannot verify new revision: {exc}", file=sys.stderr)
             return EXIT_CANNOT_VERIFY
-        verdict = decide(running, heartbeat)
+        verdict = decide(running, heartbeat, queued)
         if verdict == "healthy":
-            print(f"revision {new_revision} is healthy (running replica + heartbeat).")
+            if queued:
+                print(f"revision {new_revision} is healthy (running replica + heartbeat).")
+            else:
+                print(f"revision {new_revision} is healthy (running replica, no task queued).")
             return EXIT_HEALTHY
         if now() >= deadline:
             break
@@ -252,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resource-group", default=DEFAULT_RESOURCE_GROUP)
     parser.add_argument("--app", default=DEFAULT_APP)
+    parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--new-revision", required=True)
     parser.add_argument("--previous-revision", required=True)
     parser.add_argument("--watch-seconds", type=int, default=DEFAULT_WATCH_SECONDS)
@@ -264,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
         args.previous_revision,
         watch_seconds=args.watch_seconds,
         poll_seconds=args.poll_seconds,
+        repo=args.repo,
     )
 
 
