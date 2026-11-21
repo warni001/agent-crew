@@ -162,7 +162,7 @@ def pr_number_from_outputs(
     """The PR number for the run, if any is recorded anywhere.
 
     Sign-offs first (the reviewer names the PR it reviewed); else
-    the open_pr result — the PR URL in a function_result — since a
+    the result matched to an open_pr call by call_id, since a
     run can open a PR and still stall with no review recorded.
     """
     if sign_offs:
@@ -174,9 +174,20 @@ def pr_number_from_outputs(
         re.escape(f"github.com/{ALLOWED_REPO}/pull/") + r"(\d+)"
     )
     for output in outputs:
-        for message in getattr(output, "messages", None) or []:
+        messages = getattr(output, "messages", None) or []
+        open_pr_call_ids = {
+            content.call_id
+            for message in messages
+            for content in getattr(message, "contents", []) or []
+            if getattr(content, "type", None) == "function_call"
+            and getattr(content, "name", None) == "open_pr"
+            and getattr(content, "call_id", None)
+        }
+        for message in messages:
             for content in getattr(message, "contents", []) or []:
                 if getattr(content, "type", None) != "function_result":
+                    continue
+                if getattr(content, "call_id", None) not in open_pr_call_ids:
                     continue
                 result = getattr(content, "result", None)
                 if isinstance(result, str):
