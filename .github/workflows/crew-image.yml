@@ -124,6 +124,16 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_DEPLOY_CREDENTIALS }}
 
+      # The rollback step needs the revision that is good now, before
+      # the update mints a new one. If the new revision crash-loops
+      # or goes silent, the watch step reactivates this one.
+      - name: Record the last good revision
+        id: last-good
+        run: |
+          PREVIOUS=$(az containerapp show -g rg-agent-crew -n ca-agent-crew --query properties.latestReadyRevisionName -o tsv)
+          echo "revision=$PREVIOUS" >> "$GITHUB_OUTPUT"
+          echo "Last good revision: $PREVIOUS"
+
       - name: Update the Container App
         run: |
           SHORT_SHA="${GITHUB_SHA:0:7}"
@@ -145,3 +155,18 @@ jobs:
           done
           echo "Revision $EXPECTED never became ready (latest ready: $READY)."
           exit 1
+
+      # A bad change that passes tests still ships, and the loop is the
+      # thing that broke — so it cannot repair itself. Watch the new
+      # revision: a running replica plus a ledger heartbeat within 10
+      # minutes means healthy. A crash-loop or silence reactivates the
+      # last good revision, deactivates the new one, and fails this
+      # job loudly (exit 1) so the rollback is visible, not silent.
+      # Exit 2 (cannot verify, e.g. the deploy SP has no Storage Blob
+      # Data Reader yet) also fails the job, but rolls nothing back.
+      - name: Watch the new revision, roll back if unhealthy
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          python3 scripts/rollback_watch.py \
+            --new-revision "ca-agent-crew--deploy-$SHORT_SHA" \
+            --previous-revision "${{ steps.last-good.outputs.revision }}"
