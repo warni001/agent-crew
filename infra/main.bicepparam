@@ -20,7 +20,3 @@ param claudeModelVersion = '1'
 param claudeOrganizationName = readEnvironmentVariable('CLAUDE_ORGANIZATION_NAME', '')
 param claudeCountryCode = readEnvironmentVariable('CLAUDE_COUNTRY_CODE', 'US')
 param claudeIndustry = readEnvironmentVariable('CLAUDE_INDUSTRY', 'technology')
-
-param budgetNotifyEmail = readEnvironmentVariable('BUDGET_NOTIFY_EMAIL', 'john.warnicke@gmail.com')
-param budgetAmount = 200
-param killSwitchTime = '2026-11-21T22:00:00Z'

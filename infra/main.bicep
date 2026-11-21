@@ -24,12 +24,6 @@
 //     blob URL reaches the app as CREW_LEDGER_BLOB_URL. Cost is
 //     fractions of a cent at this scale (kilobytes, a handful of
 //     writes per task).
-//   Kill switch (the spend cutoff): a $200 Cost Management budget on the
-//     crew resource group, an Action Group, and a Logic App that deletes
-//     the crew resource group. The budget fires the Logic App at 95%
-//     (~$190); a Recurrence trigger fires it at the hard deadline,
-//     Sat Nov 21 5pm ET, whether or not the budget fired. Shutdown is a
-//     delete, not a pause.
 //   Managed identities: the container app's SystemAssigned identity is
 //     the crew's runtime identity (Key Vault Secrets User on the vault,
 //     Cognitive Services User on both Foundry accounts so models are
@@ -79,17 +73,8 @@ param claudeCountryCode string = 'US'
 @description('Industry sent to Anthropic as the marketplace attestation for Claude.')
 param claudeIndustry string = 'technology'
 
-@description('Email address for the 50% and 90% budget alerts. Override at deploy time; the 95% alert also fires the Action Group.')
-param budgetNotifyEmail string = 'john.warnicke@gmail.com'
-
 @description('Object ID of the deploy service principal (github-agent-crew-deploy). When set, it gets Storage Blob Data Reader on the ledger storage account, so the deploy workflow can read the run ledger for the post-deploy health watch (scripts/rollback_watch.py). Empty means no assignment is created — grant the role once with az role assignment create instead.')
 param deployServicePrincipalId string = ''
-
-@description('Monthly budget amount in USD for the crew resource group. The kill switch fires at 95% of this amount.')
-param budgetAmount int = 200
-
-@description('Hard shutdown time (UTC) for the Recurrence trigger: Sat Nov 21 5pm ET is 22:00 UTC. The credit expires ~6:30pm ET, so this leaves margin.')
-param killSwitchTime string = '2026-11-21T22:00:00Z'
 
 var suffix = uniqueString(resourceGroup().id)
 var vaultName = 'kv-${replace(baseName, '-', '')}-${take(suffix, 8)}'
@@ -107,9 +92,6 @@ var containerEnvName = 'cae-${baseName}'
 var containerAppName = 'ca-${baseName}'
 var storageAccountName = 'st${replace(baseName, '-', '')}${take(suffix, 8)}'
 var ledgerBlobUrl = 'https://${storageAccountName}.blob.${environment().suffixes.storage}/ledger/crew-ledger.jsonl'
-var logicAppName = 'logic-${baseName}-killswitch'
-var actionGroupName = 'ag-${baseName}-killswitch'
-var budgetName = 'budget-${baseName}'
 
 // Built-in role definition IDs.
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -480,162 +462,6 @@ resource deployLedgerReadAccess 'Microsoft.Authorization/roleAssignments@2022-04
   }
 }
 
-// Kill switch, part 1: the Logic App that deletes the crew resource
-// group. Two triggers share one action. The HTTP trigger is called by
-// the Action Group when the budget hits 95%. The Recurrence trigger
-// fires once at the hard deadline (Sat Nov 21 5pm ET) whether or not
-// the budget fired — deleting the group also deletes this Logic App,
-// so the daily recurrence never fires twice.
-// The action authenticates with the Logic App's managed identity
-// against the ARM endpoint; the identity's permission comes from the
-// narrow custom role below.
-resource logicApp 'Microsoft.Logic/workflows@2019-05-01' = {
-  name: logicAppName
-  location: location
-  identity: {
-    type: 'SystemAssigned'
-  }
-  properties: {
-    state: 'Enabled'
-    definition: {
-      '$schema': 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#'
-      contentVersion: '1.0.0.0'
-      parameters: {}
-      triggers: {
-        manual: {
-          type: 'Request'
-          kind: 'Http'
-          inputs: {
-            schema: {}
-          }
-        }
-        Recurrence: {
-          type: 'Recurrence'
-          recurrence: {
-            frequency: 'Day'
-            interval: 1
-            startTime: killSwitchTime
-            timeZone: 'UTC'
-          }
-        }
-      }
-      actions: {
-        Delete_crew_resource_group: {
-          type: 'Http'
-          inputs: {
-            method: 'DELETE'
-            uri: '${environment().resourceManager}subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}?api-version=2021-04-01'
-            authentication: {
-              type: 'ManagedServiceIdentity'
-              audience: environment().resourceManager
-            }
-          }
-          runAfter: {}
-        }
-      }
-      outputs: {}
-    }
-  }
-}
-
-// Kill switch, part 2: the narrowest role that can delete a resource
-// group — a subscription-scoped module (the main template deploys at
-// resource-group scope and cannot declare subscription-scope resources
-// directly). See killswitch-role.bicep for the trade-off: the role can
-// delete any resource group in the subscription, so the workflow's
-// hardcoded resource-group name is the control.
-module killSwitchRole './killswitch-role.bicep' = {
-  name: 'killSwitchRole'
-  scope: subscription()
-  params: {
-    logicAppPrincipalId: logicApp.identity.principalId
-  }
-}
-
-// Kill switch, part 3: the Action Group the budget calls at 95%.
-// The callback URL is the Logic App's HTTP trigger URL, resolved by
-// listCallbackUrl — the same pattern Microsoft's own examples use.
-resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
-  name: actionGroupName
-  location: 'global'
-  properties: {
-    groupShortName: 'crewkill'
-    enabled: true
-    logicAppReceivers: [
-      {
-        name: logicApp.name
-        resourceId: logicApp.id
-        callbackUrl: listCallbackUrl('${logicApp.id}/triggers/manual', '2019-05-01').value
-        useCommonAlertSchema: true
-      }
-    ]
-  }
-}
-
-// Kill switch, part 4: the budget. Scoped to the crew resource group
-// (this deployment's scope), $200 for November 2026. 50% and 90% are
-// notify-only (email + Owner role). 95% (~$190) fires the Action Group
-// and therefore the Logic App.
-// Honest limit: Cost Management evaluates budgets roughly every 24
-// hours on cost data that lands 8–24 hours late, so the 95% trigger
-// is a backstop, not a real-time cutoff — spend can overshoot between
-// evaluation runs. The 95% threshold (not 100%) leaves headroom for
-// that lag, and the Recurrence trigger is the hard deadline that does
-// not depend on cost data at all.
-resource budget 'Microsoft.Consumption/budgets@2023-11-01' = {
-  name: budgetName
-  properties: {
-    category: 'Cost'
-    amount: budgetAmount
-    timeGrain: 'Monthly'
-    timePeriod: {
-      startDate: '2026-11-01'
-      endDate: '2026-12-01'
-    }
-    notifications: {
-      Actual_50: {
-        enabled: true
-        operator: 'GreaterThan'
-        threshold: 50
-        thresholdType: 'Actual'
-        contactEmails: [
-          budgetNotifyEmail
-        ]
-        contactRoles: [
-          'Owner'
-        ]
-      }
-      Actual_90: {
-        enabled: true
-        operator: 'GreaterThan'
-        threshold: 90
-        thresholdType: 'Actual'
-        contactEmails: [
-          budgetNotifyEmail
-        ]
-        contactRoles: [
-          'Owner'
-        ]
-      }
-      Actual_95: {
-        enabled: true
-        operator: 'GreaterThan'
-        threshold: 95
-        thresholdType: 'Actual'
-        contactEmails: [
-          budgetNotifyEmail
-        ]
-        contactRoles: [
-          'Owner'
-        ]
-        contactGroups: [
-          actionGroup.id
-        ]
-      }
-    }
-  }
-}
-
 output keyVaultUrl string = vault.properties.vaultUri
 output keyVaultName string = vault.name
 output gptAccountName string = gptAccount.name
@@ -646,7 +472,3 @@ output claudeEndpoint string = claudeAccount.properties.endpoint
 output containerAppName string = crewApp.name
 output ledgerStorageAccountName string = ledgerStorage.name
 output ledgerBlobUrl string = ledgerBlobUrl
-output logicAppName string = logicApp.name
-output actionGroupName string = actionGroup.name
-output budgetName string = budget.name
-output killSwitchTime string = killSwitchTime
