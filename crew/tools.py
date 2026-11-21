@@ -206,6 +206,30 @@ def pr_checks(repo: str, pr_number: int) -> str:
     ])
 
 
+def read_pr(repo: str, pr_number: int) -> str:
+    """Read a pull request's title, description, and diff.
+
+    The reviewer needs the PR description and diff to verify the
+    change against the task and the Ponytail checklist, but no tool
+    returned them — read_repo_file reads repo files, pr_checks
+    reports CI only. Without this, the reviewer can only ask for
+    the description to be provided and never approves. `gh` is not
+    in run_shell's allowlist, so this check cannot be done with
+    run_shell — it needs a tool.
+    """
+    _check_repo(repo)
+    header = _run([
+        "gh", "pr", "view", str(pr_number), "--repo", repo,
+        "--json", "title,body",
+        "--jq", '"Title: " + .title + "\\n\\n" + (.body // "")',
+    ])
+    diff = _run(
+        ["gh", "pr", "diff", str(pr_number), "--repo", repo],
+        max_output=_READ_MAX_OUTPUT,
+    )
+    return f"{header}\n\nDiff:\n{diff}"
+
+
 def open_pr(repo: str, title: str, body: str, head: str, base: str = "main") -> str:
     """Open a pull request. Returns the PR URL. Call only after tests pass."""
     _check_repo(repo)
@@ -325,6 +349,7 @@ BUILD_TOOLS = [tool(f) for f in (
 )]
 REVIEW_TOOLS = [tool(f) for f in (
     read_repo_file, read_file, comment_on_pr, record_sign_off, pr_checks,
+    read_pr,
 )]
 MERGE_TOOLS = [tool(f) for f in (
     merge_pr, comment_on_pr, check_review_sign_off, pr_checks,
@@ -333,14 +358,14 @@ ALL_TOOLS = [tool(f) for f in (
     read_repo_file, open_pr, comment_on_pr, merge_pr,
     read_file, write_file, run_pytest, run_shell,
     record_sign_off, check_review_sign_off,
-    list_branches, list_open_prs, pr_checks,
+    list_branches, list_open_prs, pr_checks, read_pr,
 )]
 
 __all__ = [
     "read_repo_file", "open_pr", "comment_on_pr", "merge_pr",
     "read_file", "write_file", "run_pytest", "run_shell",
     "record_sign_off", "check_review_sign_off",
-    "list_branches", "list_open_prs", "pr_checks",
+    "list_branches", "list_open_prs", "pr_checks", "read_pr",
     "ALLOWED_REPOS", "GHCR_IMAGE", "image_for_commit", "assert_repo_allowed",
     "READ_TOOLS", "BUILD_TOOLS", "REVIEW_TOOLS", "MERGE_TOOLS", "ALL_TOOLS",
 ]
