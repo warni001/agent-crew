@@ -47,8 +47,12 @@ def test_planner_names_existing_branch_or_states_none():
 def test_builder_checks_existing_branch_before_creating_one():
     """The builder checks for an existing branch holding the change,
     verifies base/diff/open-PR state, and opens the PR from that branch
-    instead of creating a duplicate; a missing, stale, or merged branch
-    falls back to a fresh branch."""
+    instead of creating a duplicate; a missing branch, a stale branch
+    with no open PR, or a merged branch falls back to a fresh branch.
+    An open PR on a stale branch is updated from main and pushed, not
+    rebuilt on a fresh branch — a local-only update creates no new
+    head, so it never counts (Nov 21, 2026: the #48 sweep stalled
+    three times because prepared updates were never pushed)."""
     import re
 
     roles_mod = require_crew("roles")
@@ -61,7 +65,12 @@ def test_builder_checks_existing_branch_before_creating_one():
     assert "not already merged" in text
     assert "no equivalent PR" in text and "list_open_prs" in text
     assert "open the PR from that branch" in text
-    assert "missing, stale, or already merged" in text
+    assert "missing, stale with no open PR, or already merged" in text
+    assert "PR is already open on that branch" in text
+    assert "update the existing branch from main" in text
+    assert "push the updated branch" in text
+    assert "do not create a fresh branch for a PR that already exists" in text
+    assert "never pushed creates no new head" in text
 
 
 def test_merger_judges_each_pr_on_its_own_sign_off():
