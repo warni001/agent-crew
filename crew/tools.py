@@ -192,6 +192,22 @@ def list_open_prs(repo: str, head: str = "") -> str:
     return _run(cmd)
 
 
+def pr_checks(repo: str, pr_number: int) -> str:
+    """Report GitHub CI check status for a pull request, with its head SHA.
+
+    Returns JSON with the PR head SHA and each check's name, status,
+    and conclusion, so the caller can confirm CI is green on the exact
+    head SHA before merging. `gh` is not in run_shell's allowlist,
+    so this check cannot be done with run_shell — it needs a tool.
+    """
+    _check_repo(repo)
+    return _run([
+        "gh", "pr", "view", str(pr_number), "--repo", repo,
+        "--json", "headRefOid,statusCheckRollup",
+        "--jq", "{head: .headRefOid, checks: [(.statusCheckRollup // [])[] | {name: .name, status: .status, conclusion: .conclusion}]}",
+    ])
+
+
 def open_pr(repo: str, title: str, body: str, head: str, base: str = "main") -> str:
     """Open a pull request. Returns the PR URL. Call only after tests pass."""
     _check_repo(repo)
@@ -307,26 +323,26 @@ READ_TOOLS = [tool(f) for f in (
 )]
 BUILD_TOOLS = [tool(f) for f in (
     read_repo_file, read_file, write_file, run_pytest, run_shell,
-    open_pr, list_branches, list_open_prs,
+    open_pr, list_branches, list_open_prs, pr_checks,
 )]
 REVIEW_TOOLS = [tool(f) for f in (
-    read_repo_file, read_file, comment_on_pr, record_sign_off,
+    read_repo_file, read_file, comment_on_pr, record_sign_off, pr_checks,
 )]
 MERGE_TOOLS = [tool(f) for f in (
-    merge_pr, comment_on_pr, check_review_sign_off,
+    merge_pr, comment_on_pr, check_review_sign_off, pr_checks,
 )]
 ALL_TOOLS = [tool(f) for f in (
     read_repo_file, open_pr, comment_on_pr, merge_pr,
     read_file, write_file, run_pytest, run_shell,
     record_sign_off, check_review_sign_off,
-    list_branches, list_open_prs,
+    list_branches, list_open_prs, pr_checks,
 )]
 
 __all__ = [
     "read_repo_file", "open_pr", "comment_on_pr", "merge_pr",
     "read_file", "write_file", "run_pytest", "run_shell",
     "record_sign_off", "check_review_sign_off",
-    "list_branches", "list_open_prs",
+    "list_branches", "list_open_prs", "pr_checks",
     "ALLOWED_REPOS", "GHCR_IMAGE", "image_for_commit", "assert_repo_allowed",
     "READ_TOOLS", "BUILD_TOOLS", "REVIEW_TOOLS", "MERGE_TOOLS", "ALL_TOOLS",
 ]
