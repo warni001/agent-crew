@@ -23,7 +23,7 @@
 #      likeliest deploy blocker; a zero quota fails the model deployments,
 #      not the rest of the template).
 #   4. Deploys infra/main.bicep with infra/main.bicepparam (two Foundry
-#      accounts, Container Apps, Key Vault, Log Analytics, kill switch).
+#      accounts, Container Apps, Key Vault, Log Analytics).
 #   5. Stores the crew's GitHub fine-grained token in the Key Vault as
 #      GitHubToken — from GITHUB_CREW_TOKEN in the environment (or a
 #      repo-root .env, never committed). Warns and skips when the token
@@ -131,6 +131,16 @@ if [ -z "${CLAUDE_ORGANIZATION_NAME:-}" ]; then
 fi
 
 echo "Deploying infra/main.bicep ..."
+# Resolve the deploy SP's object ID for the ledger read grant. The
+# template's deployServicePrincipalId param is the object ID, not the
+# app ID. Exported as DEPLOY_SP_OID so main.bicepparam can read it.
+# Empty means no assignment is created (the rollback watch exits loud).
+DEPLOY_SP_OID=""
+DEPLOY_SP_APP_ID="$(az ad sp list --display-name "$DEPLOY_SP_NAME" --query "[0].appId" -o tsv)"
+if [ -n "$DEPLOY_SP_APP_ID" ]; then
+  DEPLOY_SP_OID="$(az ad sp show --id "$DEPLOY_SP_APP_ID" --query id -o tsv || true)"
+  export DEPLOY_SP_OID
+fi
 RESULT="$(az deployment group create \
   --resource-group "$RESOURCE_GROUP" \
   --template-file main.bicep \
@@ -183,9 +193,8 @@ echo "     its own image to GHCR and updates the app. Deploy the sha tag,"
 echo "     never :latest (an unchanged :latest string mints no new"
 echo "     revision, and a :latest pull can resolve stale):"
 echo "       az containerapp update -g $RESOURCE_GROUP -n <app> --image ghcr.io/warni001/agent-crew:sha-<commit-sha> --revision-suffix <suffix>"
-echo "  4. Manual kill (any time before the automatic deadline):"
+echo "  4. Manual kill (there is no automatic kill — the kill switch was"
+echo "     removed Nov 21, 2026; you delete the group by hand when done):"
 echo "       az group delete --name $RESOURCE_GROUP --yes --no-wait"
-echo "     The automatic kill fires at 95% of the \$200 budget and at"
-echo "     Sat Nov 21 5pm ET, whichever comes first."
 echo "  5. AZURE_DEPLOY_CREDENTIALS is set in $GITHUB_REPO by this script"
 echo "     (or printed above for manual copy if gh was unavailable)."
