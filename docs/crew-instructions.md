@@ -132,7 +132,7 @@ error naming the variable.
   (`crew/spend.py`, `crew/clients.py`) and refuses the next call
   once tracked spend reaches $190. One call can still cross the
   line — the overshoot is bounded by a single call's cost.
-- **Hard deadline:** Sat Nov 21 5pm ET. The kill-switch Logic App
+- **Hard deadline:** Sat Dec 26 3:08:36pm ET. The kill-switch Logic App
   fires then whether or not the budget fired. Stop before it.
 
 ## Models
@@ -201,7 +201,7 @@ in the same PR.
   `crew.config.ConfigError(ValueError)` raised naming any missing
   variable; never reads `.env`.
 - `crew.budget.BUDGET_USD = 200.0`, `STOP_THRESHOLD_USD = 190.0`,
-  `HARD_DEADLINE` = Sat Nov 21 2026 5pm America/New_York;
+  `HARD_DEADLINE` = Sat Dec 26 2026 3:08:36pm America/New_York;
   `crew.budget.should_stop(spent_usd, now) -> bool`.
 - `crew.gates.REVIEWER_ROLE = "reviewer"`;
   `crew.gates.can_merge(reviews) -> bool` — true only with a
