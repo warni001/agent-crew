@@ -5,11 +5,22 @@
 #
 # The package is public because the repo is public (GHCR images inherit
 # the repo's visibility), so the Container App can pull it anonymously.
+#
+# Fork rule: forks on this public repo must not do anything requiring
+# John's creds — no Azure login, no deploy, no secrets, no GHCR push,
+# no PAT use. Fork PRs build only: no GHCR login, no push, the image
+# is loaded locally for the smoke test instead. Internal PRs (branches
+# in this repo, which is how the crew works) build and push to GHCR,
+# so a push to main only has to deploy the already-built sha image.
+# Never use `pull_request_target` here — it runs in the base repo's
+# context, with secrets. `pull_request` does not pass secrets to forks.
 
 name: Build and push crew image
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
 
 permissions:
@@ -31,6 +42,10 @@ jobs:
           persist-credentials: false
 
       - name: Log in to GHCR
+        # Fork PRs: no creds. GitHub already withholds secrets from
+        # fork pull_request runs and gives a read-only token, but do
+        # not depend on that alone — gate the login here too.
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.fork == false
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -41,7 +56,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          # Internal PRs and pushes to main push to GHCR; fork PRs
+          # build only and load the image locally, so the smoke test
+          # below can still run it without pushing anything.
+          push: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.fork == false }}
+          load: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true }}
           # Layer cache: hosted runners are fresh VMs, so without this
           # every build reinstalls everything from scratch (~2.5 min).
           # The Actions cache keeps unchanged layers between runs.
@@ -77,6 +96,10 @@ jobs:
   # "[crew] Done:" issue guard), so the cost is lost in-flight
   # progress, not duplicated work.
   deploy:
+    # Deploy only on a push to main — never on a PR, and never from
+    # fork code. The image for this commit was already built and
+    # pushed by the build job above; this job only deploys it.
+    if: github.event_name == 'push'
     needs: build-and-push
     runs-on: ubuntu-latest
     concurrency:
