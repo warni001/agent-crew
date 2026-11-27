@@ -4,9 +4,8 @@ budget makes no further API calls at all.
 
 Async calls run via asyncio.run (repo convention: no pytest-asyncio).
 
-The client is built without __init__ (object.__new__) and the
-parent's get_response is faked, so no OpenAI client is ever
-constructed and no network is touched. All model calls are faked.
+The raw SDK response hook is faked below the middleware; no
+network is touched.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import asyncio
 
 import pytest
 from agent_framework import ChatResponse, Message
-from agent_framework_openai import OpenAIChatClient
+from agent_framework_openai import RawOpenAIChatClient
 
 from conftest import require_crew
 
@@ -45,10 +44,7 @@ def clean_tracker(spend_mod):
 
 
 def _client(clients_mod, model="gpt-5-4-mini"):
-    """CountingChatClient without __init__: only .model is read."""
-    client = object.__new__(clients_mod.CountingChatClient)
-    client.model = model
-    return client
+    return clients_mod.CountingChatClient(model=model, api_key="<offline-test>")
 
 
 def _run(client, messages):
@@ -72,7 +68,7 @@ def test_call_records_usage(clients_mod, spend_mod, monkeypatch):
         calls.append(kwargs)
         return _response(usage={"input_token_count": 1_000_000, "output_token_count": 100_000})
 
-    monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
+    monkeypatch.setattr(RawOpenAIChatClient, "_inner_get_response", fake_get_response)
     result = _run(client, [Message(role="user", contents=["hi"])])
     assert result.text == "done"
     assert len(calls) == 1
@@ -88,7 +84,7 @@ def test_response_model_prices_the_call(clients_mod, spend_mod, monkeypatch):
     async def fake_get_response(self, messages, **kwargs):
         return _response(model="gpt-5.4-mini", usage={"input_token_count": 1_000_000})
 
-    monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
+    monkeypatch.setattr(RawOpenAIChatClient, "_inner_get_response", fake_get_response)
     _run(client, [Message(role="user", contents=["hi"])])
     assert spend_mod.spent_usd() == pytest.approx(0.83)
 
@@ -99,7 +95,7 @@ def test_client_model_is_the_fallback(clients_mod, spend_mod, monkeypatch):
     async def fake_get_response(self, messages, **kwargs):
         return _response(model=None, usage={"output_token_count": 1_000_000})
 
-    monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
+    monkeypatch.setattr(RawOpenAIChatClient, "_inner_get_response", fake_get_response)
     _run(client, [Message(role="user", contents=["hi"])])
     assert spend_mod.spent_usd() == pytest.approx(4.95)
 
@@ -110,7 +106,7 @@ def test_missing_usage_costs_zero(clients_mod, spend_mod, monkeypatch):
     async def fake_get_response(self, messages, **kwargs):
         return _response(usage=None)
 
-    monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
+    monkeypatch.setattr(RawOpenAIChatClient, "_inner_get_response", fake_get_response)
     _run(client, [Message(role="user", contents=["hi"])])
     assert spend_mod.spent_usd() == pytest.approx(0.0)
 
@@ -124,7 +120,7 @@ def test_spent_budget_makes_no_api_call(clients_mod, spend_mod, monkeypatch):
         calls.append(1)
         return _response(usage={"input_token_count": 1_000_000})
 
-    monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
+    monkeypatch.setattr(RawOpenAIChatClient, "_inner_get_response", fake_get_response)
     with pytest.raises(spend_mod.SpendLimitExceeded, match="stop line"):
         client.get_response([Message(role="user", contents=["hi"])])
     assert calls == []
@@ -139,7 +135,7 @@ def test_one_call_may_cross_the_line(clients_mod, spend_mod, monkeypatch):
     async def fake_get_response(self, messages, **kwargs):
         return _response(usage={"input_token_count": 1_000_000})  # +$0.83
 
-    monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
+    monkeypatch.setattr(RawOpenAIChatClient, "_inner_get_response", fake_get_response)
     _run(client, [Message(role="user", contents=["hi"])])
     assert spend_mod.spent_usd() == pytest.approx(190.82)
     with pytest.raises(spend_mod.SpendLimitExceeded):
@@ -148,6 +144,8 @@ def test_one_call_may_cross_the_line(clients_mod, spend_mod, monkeypatch):
 
 def test_streaming_passes_through_uncounted(clients_mod, spend_mod, monkeypatch):
     client = _client(clients_mod)
+    from agent_framework_openai import OpenAIChatClient
+
     sentinel = object()
 
     def fake_get_response(self, messages, **kwargs):
@@ -155,8 +153,11 @@ def test_streaming_passes_through_uncounted(clients_mod, spend_mod, monkeypatch)
         return sentinel
 
     monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
-    assert client.get_response([Message(role="user", contents=["hi"])], stream=True) is sentinel
-    assert spend_mod.spent_usd() == pytest.approx(0.0)
+    messages = [Message(role="user", contents=["hi"])]
+    assert client.get_response(messages, stream=True) is sentinel
+    assert spend_mod.spent_usd() == 0.0
+    with spend_mod.task_limits(3, 59), pytest.raises(ValueError, match="streaming"):
+        client.get_response(messages, stream=True)
 
 
 def test_make_chat_client_builds_counting_client(clients_mod, roles_mod, monkeypatch):

@@ -28,6 +28,7 @@ from pathlib import Path
 from agent_framework import tool
 
 from .config import ALLOWED_REPO
+from .spend import TaskTimeLimitExceeded, remaining_task_seconds
 
 # Default cap for command diagnostics: ~20KB, about 5k tokens.
 _MAX_OUTPUT = 20_000
@@ -47,7 +48,7 @@ _SHELL_ALLOWED_PREFIXES = (
 
 def _run(
     cmd: list[str],
-    timeout: int = 120,
+    timeout: float = 120,
     max_output: int | None = _MAX_OUTPUT,
     *,
     raw_stdout: bool = False,
@@ -65,14 +66,21 @@ def _run(
     mode, so their diagnostics behave exactly as before. Raw bytes
     are decoded by hand below.
     """
+    remaining = remaining_task_seconds()
+    task_bounded = remaining is not None and remaining <= timeout
+    if remaining is not None:
+        timeout = min(timeout, remaining)
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=not raw_stdout, timeout=timeout
         )
     except subprocess.TimeoutExpired:
+        if task_bounded:
+            raise TaskTimeLimitExceeded() from None
         message = f"command timed out after {timeout}s: {cmd[0]}"
         logging.getLogger("crew.tools").warning("command failed: %s", message)
         raise RuntimeError(message) from None
+    remaining_task_seconds()
     if proc.returncode != 0:
         out = _decode(proc.stdout + proc.stderr).strip()
         # Log the failure here, with the command and its output: the

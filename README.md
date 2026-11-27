@@ -114,6 +114,15 @@ tracker and the deadline.
   still cross the line (the check runs before the call, not after),
   so the overshoot past $190 is bounded by a single call's cost.
 
+Each task attempt also has its own tracked model spend limit
+(`CREW_TASK_COST_LIMIT_USD`, default `$3.00`) and elapsed time limit
+(`CREW_TASK_TIME_LIMIT_MINUTES`, default `59`). Time starts before
+branch setup. A limit stops that attempt, not the crew; failure
+reporting and the spend checkpoint still run. The model request that
+crosses the cost limit can still be billed because usage is reported
+after the response. Cancelling a request also does not guarantee that
+the provider stops processing or billing it.
+
 Honest limit: the tracker prices calls from API-reported usage, so
 it sees spend in minutes, not hours — but it only runs while the
 crew runs, and it prices at assumed per-token rates, not from

@@ -207,3 +207,18 @@ def test_validate_rejects_non_classic_explicit_endpoint(config_mod):
 def test_validate_passes_with_explicit_classic_endpoint_only(config_mod):
     cfg = config_mod.CrewConfig(azure_openai_endpoint=CLASSIC_ENDPOINT)
     cfg.validate()  # must not raise
+
+
+@pytest.mark.parametrize("var, attr, default", [
+    ("CREW_TASK_COST_LIMIT_USD", "task_cost_limit_usd", 3.0),
+    ("CREW_TASK_TIME_LIMIT_MINUTES", "task_time_limit_minutes", 59.0),
+])
+def test_task_limit_env(config_mod, var, attr, default):
+    env = {"AZURE_OPENAI_ENDPOINT": CLASSIC_ENDPOINT}
+    assert getattr(config_mod.CrewConfig.from_env(env), attr) == default
+    cfg = config_mod.CrewConfig.from_env({**env, var: "1.5"})
+    cfg.validate()
+    assert getattr(cfg, attr) == 1.5
+    for invalid in ("nan", "inf", "-inf", "0", "-1"):
+        with pytest.raises(ValueError, match=var):
+            config_mod.CrewConfig.from_env({**env, var: invalid}).validate()

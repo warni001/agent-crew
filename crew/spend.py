@@ -36,6 +36,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from time import monotonic
 from typing import Any
 
 from .credit import stop_threshold_usd
@@ -75,6 +79,58 @@ class SpendLimitExceeded(RuntimeError):
     """Raised before a model call when the tracked total hit the stop line."""
 
 
+class TaskLimitExceeded(Exception):
+    """Stop the current attempt, not the crew."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+class TaskTimeLimitExceeded(TaskLimitExceeded):
+    def __init__(self) -> None:
+        super().__init__("task_time_limit", "task time limit reached")
+
+
+@dataclass
+class _TaskLimits:
+    cost_limit: float
+    deadline: float
+    spent: float = 0.0
+
+
+_TASK_LIMITS: ContextVar[_TaskLimits | None] = ContextVar("task_limits", default=None)
+
+
+@contextmanager
+def task_limits(cost_usd: float, minutes: float):
+    """Fresh limits for one attempt; leave cumulative spend untouched."""
+    token = _TASK_LIMITS.set(_TaskLimits(cost_usd, monotonic() + minutes * 60))
+    try:
+        yield
+    finally:
+        _TASK_LIMITS.reset(token)
+
+
+def remaining_task_seconds() -> float | None:
+    limits = _TASK_LIMITS.get()
+    if limits is None:
+        return None
+    remaining = limits.deadline - monotonic()
+    if remaining <= 0:
+        raise TaskTimeLimitExceeded()
+    return remaining
+
+
+def check_task_cost() -> None:
+    limits = _TASK_LIMITS.get()
+    if limits is not None and limits.spent >= limits.cost_limit:
+        raise TaskLimitExceeded(
+            "task_cost_limit",
+            f"task spend ${limits.spent:.2f} reached the ${limits.cost_limit:.2f} limit",
+        )
+
+
 def _prices_for(model: str | None) -> dict[str, float]:
     """Price table for a deployment name; old Astra rates for anything unknown."""
     key = _ALIASES.get(model or "", model or "")
@@ -109,10 +165,9 @@ def price_usd(model: str | None, usage: Mapping[str, Any] | None) -> float:
 class SpendTracker:
     """Accumulated spend for one crew process.
 
-    Single process, no locking — same as the ledger (one writer). The
-    tracker never raises on record(): the client wrapper checks the
-    stop line *before* the next call instead, so the overshoot past
-    the stop line is at most one call's cost.
+    Single process, no locking — same as the ledger (one writer).
+    The client checks the global stop line before each request and
+    the task cost limit both before and after each response.
     """
 
     def __init__(
@@ -160,6 +215,9 @@ class SpendTracker:
             entry["cached"] += cached
             entry["output"] += int(usage.get("output_token_count") or 0)
         self._total_usd += cost
+        limits = _TASK_LIMITS.get()
+        if limits is not None:
+            limits.spent += cost
         self._fire_milestones()
         return self._total_usd
 

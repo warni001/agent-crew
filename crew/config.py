@@ -8,6 +8,7 @@ to the operator instead.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -69,6 +70,8 @@ class CrewConfig:
     # orchestration (there is no manager agent); retained so the env
     # knob stays valid if a coordinating agent is added back.
     budget_limit_usd: float = 200.0
+    task_cost_limit_usd: float = 3.0
+    task_time_limit_minutes: float = 59.0
     # Manual starting offset: spend incurred before the tracker existed.
     # It only seeds the tracker at process start (crew/spend.py); the
     # live total is what the tracker counts from API-reported usage.
@@ -124,6 +127,8 @@ class CrewConfig:
             merger_model=env.get("CREW_MODEL_MERGER", "gpt-6-2-sol"),
             manager_model=env.get("CREW_MODEL_MANAGER", "gpt-6-2-sol"),
             budget_limit_usd=float(env.get("CREW_BUDGET_LIMIT_USD", "200")),
+            task_cost_limit_usd=float(env.get("CREW_TASK_COST_LIMIT_USD", "3.00")),
+            task_time_limit_minutes=float(env.get("CREW_TASK_TIME_LIMIT_MINUTES", "59")),
             budget_spent_usd=float(env.get("CREW_BUDGET_SPENT_USD", "0")),
             deadline_iso=env.get("CREW_DEADLINE", "2026-12-26T20:08:36Z"),
             ledger_path=env.get("CREW_LEDGER_PATH", "crew-ledger.jsonl"),
@@ -157,6 +162,12 @@ class CrewConfig:
             )
         if self.budget_limit_usd <= 0:
             problems.append("CREW_BUDGET_LIMIT_USD must be > 0")
+        for var, value in (
+            ("CREW_TASK_COST_LIMIT_USD", self.task_cost_limit_usd),
+            ("CREW_TASK_TIME_LIMIT_MINUTES", self.task_time_limit_minutes),
+        ):
+            if not math.isfinite(value) or value <= 0:
+                problems.append(f"{var} must be finite and > 0")
         if problems:
             raise ValueError("; ".join(problems))
 

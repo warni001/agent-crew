@@ -37,7 +37,17 @@ from .blob_ledger import build_ledger
 from .ledger import Ledger
 from .orchestration import builder_tool_calls, format_run_summary, run_task
 from .roles import build_roles
-from .spend import TRACKER, reset_spend, restore_spend, spent_usd
+from .spend import (
+    TRACKER,
+    TaskLimitExceeded,
+    TaskTimeLimitExceeded,
+    check_task_cost,
+    remaining_task_seconds,
+    reset_spend,
+    restore_spend,
+    spent_usd,
+    task_limits,
+)
 from .tools import ensure_task_branch, task_branch_name
 
 # The crew's first task, agreed with the repo owner: build v1 of itself.
@@ -186,7 +196,33 @@ def _settle_task_issue(
             log.warning("could not tag task issue #%s: %s", issue_number, exc)
 
 
+async def _run_with_deadline(roles, task, config):
+    timer = asyncio.timeout(remaining_task_seconds())
+    try:
+        async with timer:
+            outputs = await run_task(roles, task, config)
+            # A synchronous tool can return before the event loop gets to
+            # deliver cancellation. Check the monotonic deadline too.
+            remaining_task_seconds()
+            check_task_cost()
+            return outputs
+    except TimeoutError as exc:
+        if timer.expired():
+            raise TaskTimeLimitExceeded() from exc
+        raise
+
+
 def run_one_task(
+    config: CrewConfig, ledger: Ledger, task: str, issue_number: int | None = None
+) -> int:
+    """Run one attempt and checkpoint cumulative spend on every exit."""
+    try:
+        return _run_one_task(config, ledger, task, issue_number)
+    finally:
+        _record_spend(ledger)
+
+
+def _run_one_task(
     config: CrewConfig, ledger: Ledger, task: str, issue_number: int | None = None
 ) -> int:
     """Run a single task through the crew. Returns the exit code.
@@ -213,35 +249,42 @@ def run_one_task(
     # of failing the run. The branch line goes only to the run
     # input; the ledger keeps the original task text, so settlement
     # matching is unchanged.
-    branch = None
     try:
-        branch = ensure_task_branch(task_branch_name(issue_number, task))
-        log.info("task branch: %s", branch)
-    except Exception as exc:  # noqa: BLE001 - branch setup must not kill a run
-        log.warning("could not set up task branch, continuing without one: %s", exc)
-    _record(
-        ledger, "task_started", task=task, repo=config.repo,
-        **({"branch": branch} if branch else {}),
-    )
-    try:
-        before = len(Ledger(config.ledger_path).sign_offs())
-    except Exception as exc:  # noqa: BLE001 - ledger must not kill a run
-        log.warning("could not read sign-off ledger: %s", exc)
-        before = None
-    try:
-        roles = build_roles(config)
-        workflow_task = task
-        if branch is not None:
-            workflow_task = (
-                f"{task}\n\nWork on branch: {branch} (already created and "
-                "checked out for this task — do not create another branch; "
-                "confirm with `git branch --show-current` if unsure)."
-            )
-        outputs = asyncio.run(run_task(roles, workflow_task, config))
+        with task_limits(config.task_cost_limit_usd, config.task_time_limit_minutes):
+            branch = None
+            try:
+                branch = ensure_task_branch(task_branch_name(issue_number, task))
+                log.info("task branch: %s", branch)
+            except TaskLimitExceeded:
+                raise
+            except Exception as exc:  # noqa: BLE001 - branch setup must not kill a run
+                log.warning("could not set up task branch, continuing without one: %s", exc)
+            finally:
+                _record(
+                    ledger, "task_started", task=task, repo=config.repo,
+                    **({"branch": branch} if branch else {}),
+                )
+            try:
+                before = len(Ledger(config.ledger_path).sign_offs())
+            except Exception as exc:  # noqa: BLE001 - ledger must not kill a run
+                log.warning("could not read sign-off ledger: %s", exc)
+                before = None
+            remaining_task_seconds()
+            roles = build_roles(config)
+            workflow_task = task
+            if branch is not None:
+                workflow_task = (
+                    f"{task}\n\nWork on branch: {branch} (already created and "
+                    "checked out for this task — do not create another branch; "
+                    "confirm with `git branch --show-current` if unsure)."
+                )
+            outputs = asyncio.run(_run_with_deadline(roles, workflow_task, config))
     except Exception as exc:  # noqa: BLE001 - report the failure, then exit 1
-        _record(ledger, "task_failed", task=task, error=str(exc))
+        fields = {"reason": exc.reason} if isinstance(exc, TaskLimitExceeded) else {}
+        _record(ledger, "task_failed", task=task, error=str(exc), **fields)
         log.error("task failed: %s", exc)
-        _settle_task_issue(config, issue_number, "Failed: the run raised an exception.")
+        comment = f"Failed: {exc}." if fields else "Failed: the run raised an exception."
+        _settle_task_issue(config, issue_number, comment)
         return 1
 
     # One summary for every settlement path: the header (agents ran,
@@ -376,9 +419,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # One-shot mode: an explicit task runs once and exits.
     if args.task:
-        code = run_one_task(config, ledger, args.task)
-        _record_spend(ledger)
-        return code
+        return run_one_task(config, ledger, args.task)
 
     # Loop mode: default task first, then the issue queue, until the
     # credit/deadline stop rule fires.
@@ -397,7 +438,6 @@ def main(argv: list[str] | None = None) -> int:
             continue
         log.info("picked up task: %s", picked["task"][:120])
         run_one_task(config, ledger, picked["task"], issue_number=picked["number"])
-        _record_spend(ledger)
         time.sleep(interval)
 
 
