@@ -232,6 +232,7 @@ def test_tag_task_stalled_tolerates_edit_failure(feedback_mod, monkeypatch):
 @pytest.fixture
 def report_issues(feedback_mod, monkeypatch):
     """Keep issue state across mocked GitHub commands."""
+    monkeypatch.setenv("CREW_GITHUB_USER_ID", "1")
     issues = []
 
     def run(argv, **kwargs):
@@ -244,6 +245,7 @@ def report_issues(feedback_mod, monkeypatch):
             output = f"https://github.com/warni001/agent-crew/issues/{number}"
             issues.append({
                 "number": number, "html_url": output, "labels": [], "state": "open",
+                "user": {"id": 1},
                 "title": argv[argv.index("--title") + 1],
                 "body": argv[argv.index("--body") + 1], "comments": [],
             })
@@ -301,7 +303,54 @@ def test_done_supersedes_legacy_stall(feedback_mod, report_issues):
     assert done["title"].startswith(feedback_mod.DONE_TITLE_PREFIX)
 
 
+@pytest.mark.parametrize("marked_outcome", ["done", "stalled"])
+def test_other_authors_are_not_reused_or_closed(feedback_mod, report_issues, marked_outcome):
+    repo = "warni001/agent-crew"
+    task = "Fix X"
+    for outcome in ("done", "stalled"):
+        payload = getattr(feedback_mod, f"{outcome}_issue_payload")(task, "Earlier report")
+        body = payload["body"]
+        if outcome == marked_outcome:
+            body = f"<!-- crew-settlement: issue:84 -->\n\n{body}"
+        feedback_mod.open_issue(repo, payload["title"], body)
+        report_issues[-1]["user"] = {"id": 2}
+
+    url = feedback_mod.report_done(repo, task, "Finished", issue_number=84)
+
+    foreign_done, foreign_stalled, fresh = report_issues
+    for report in (foreign_done, foreign_stalled):
+        assert report["state"] == "open"
+        assert report["comments"] == []
+    assert fresh["html_url"] == url
+    assert fresh["user"] == {"id": 1}
+    assert "Finished" in fresh["body"]
+
+
+@pytest.mark.parametrize("crew_id", [None, "0", "1_0", "not an ID"])
+def test_unconfigured_author_posts_fresh(feedback_mod, report_issues, monkeypatch, crew_id):
+    repo = "warni001/agent-crew"
+    first = feedback_mod.report_done(repo, "Fix X", "First report")
+    if crew_id is None:
+        monkeypatch.delenv("CREW_GITHUB_USER_ID")
+    else:
+        monkeypatch.setenv("CREW_GITHUB_USER_ID", crew_id)
+    assert feedback_mod.report_done(repo, "Fix X", "Second report") != first
+    assert report_issues[0]["comments"] == []
+    assert report_issues[0]["state"] == "open"
+
+
+@pytest.mark.parametrize("author", [None, {}, {"id": True}, {"id": "1"}, {"id": 1.0}])
+def test_unverified_author_metadata_posts_fresh(feedback_mod, report_issues, author):
+    repo = "warni001/agent-crew"
+    first = feedback_mod.report_done(repo, "Fix X", "First report")
+    report_issues[0]["user"] = author
+    assert feedback_mod.report_done(repo, "Fix X", "Second report") != first
+    assert report_issues[0]["comments"] == []
+    assert report_issues[0]["state"] == "open"
+
+
 def test_lookup_failure_does_not_create_report(feedback_mod, monkeypatch):
+    monkeypatch.setenv("CREW_GITHUB_USER_ID", "1")
     calls = []
 
     def run(argv, **kwargs):

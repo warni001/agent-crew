@@ -10,9 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import subprocess
 
-from .config import ALLOWED_REPO
 from .tools import _check_repo, _run
 
 # Label an issue carries when it is a task for the crew to pick up.
@@ -271,6 +271,17 @@ def _post_settlement(
         else f"task:{hashlib.sha256(task.encode('utf-8')).hexdigest()}"
     )
     marker = f"{_REPORT_MARKER}{key} -->"
+    report_body = f"{marker}\n\n{payload['body']}"
+
+    # A task marker is not proof of authorship. With no trusted account,
+    # create the report without touching any existing issue.
+    raw_id = os.environ.get("CREW_GITHUB_USER_ID", "").strip()
+    try:
+        crew_id = int(raw_id) if raw_id.isascii() and raw_id.isdecimal() else 0
+    except ValueError:
+        crew_id = 0
+    if crew_id <= 0:
+        return open_issue(repo, payload["title"], report_body)
 
     # The issues endpoint is paginated and does not rely on search indexing,
     # which can lag behind a just-created report.
@@ -283,6 +294,10 @@ def _post_settlement(
     matches = []
     for page in pages:
         for row in page:
+            author = row.get("user")
+            author_id = author.get("id") if isinstance(author, dict) else None
+            if type(author_id) is not int or author_id != crew_id:
+                continue
             if (
                 "pull_request" in row or row["number"] == issue_number
                 or any(label["name"] == TASK_LABEL for label in row["labels"])
@@ -306,7 +321,7 @@ def _post_settlement(
 
     current = next((row for outcome, row in matches if outcome == prefix), None)
     if current is None:
-        url = open_issue(repo, payload["title"], f"{marker}\n\n{payload['body']}")
+        url = open_issue(repo, payload["title"], report_body)
     else:
         url = current["html_url"]
         comment_on_task_issue(repo, current["number"], payload["body"])
