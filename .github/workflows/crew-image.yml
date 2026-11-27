@@ -160,14 +160,21 @@ jobs:
       - name: Update the Container App
         run: |
           SHORT_SHA="${GITHUB_SHA:0:7}"
+          # The suffix carries the run attempt: a re-run of this job
+          # for the same sha must mint a new revision, not collide
+          # with the first attempt's (possibly rolled-back) one.
+          # Nov 27: re-runs failed with 'revision with suffix
+          # deploy-<sha> already exists'.
+          SUFFIX="deploy-$SHORT_SHA-a$GITHUB_RUN_ATTEMPT"
           az containerapp update -g rg-agent-crew -n ca-agent-crew \
             --image ghcr.io/warni001/agent-crew:sha-"$GITHUB_SHA" \
-            --revision-suffix deploy-"$SHORT_SHA"
+            --revision-suffix "$SUFFIX"
 
       - name: Verify the new revision is ready
         run: |
           SHORT_SHA="${GITHUB_SHA:0:7}"
-          EXPECTED="ca-agent-crew--deploy-$SHORT_SHA"
+          SUFFIX="deploy-$SHORT_SHA-a$GITHUB_RUN_ATTEMPT"
+          EXPECTED="ca-agent-crew--$SUFFIX"
           for _ in $(seq 1 30); do
             READY=$(az containerapp show -g rg-agent-crew -n ca-agent-crew --query properties.latestReadyRevisionName -o tsv)
             if [ "$READY" = "$EXPECTED" ]; then
@@ -192,6 +199,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SHORT_SHA="${GITHUB_SHA:0:7}"
+          SUFFIX="deploy-$SHORT_SHA-a$GITHUB_RUN_ATTEMPT"
           python3 scripts/rollback_watch.py \
-            --new-revision "ca-agent-crew--deploy-$SHORT_SHA" \
+            --new-revision "ca-agent-crew--$SUFFIX" \
             --previous-revision "${{ steps.last-good.outputs.revision }}"
