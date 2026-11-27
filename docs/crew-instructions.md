@@ -122,18 +122,17 @@ error naming the variable.
 
 ## Stop rules (spend and deadline)
 
-- **Budget:** $200. Stop work at **$190 (95%)** — the kill-switch
-  budget fires at 95% and deletes the resource group. Cost data
-  lands 8–24h late, so $190 is a backstop, not a real-time cutoff:
-  stop yourself first. Two faster layers do that for you: metric
-  alerts on Foundry token usage fire the same kill switch at $40 of
-  tokens per deployment per day (see `infra/alerts.bicep`), and the
-  crew itself counts every call from API-reported usage
+- **Budget:** $200. Stop work at **$190 (95%)**. There is no
+  automatic kill — no Cost Management budget, no Action Group, no
+  Logic App, no $40 metric alert (the Nov 20 kill switch and its
+  template were removed Nov 21, 2026). The only enforcement is the
+  crew itself: it counts every call from API-reported usage
   (`crew/spend.py`, `crew/clients.py`) and refuses the next call
   once tracked spend reaches $190. One call can still cross the
-  line — the overshoot is bounded by a single call's cost.
-- **Hard deadline:** Sat Dec 26 3:08:36pm ET. The kill-switch Logic App
-  fires then whether or not the budget fired. Stop before it.
+  line — the overshoot is bounded by a single call's cost. Stop
+  yourself first; nothing in Azure stops you.
+- **Hard deadline:** Sat Dec 26 3:08:36pm ET. The crew refuses to
+  start past it. It deletes nothing. Stop before it.
 
 ## Models
 

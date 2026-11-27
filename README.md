@@ -20,11 +20,9 @@ person.
 ```
 infra/
   main.bicep            Azure resources (Foundry accounts, Container Apps,
-                        Key Vault, Log Analytics, kill switch)
-  killswitch-role.bicep subscription-scoped module: the narrow custom role
-                        the kill-switch Logic App uses
-  main.bicepparam       parameter file (reads CLAUDE_* and BUDGET_* from
-                        the environment)
+                        Key Vault, Log Analytics, ledger storage)
+  main.bicepparam       parameter file (reads CLAUDE_* and DEPLOY_SP_OID
+                        from the environment)
   deploy.sh             deploy from your Mac (where `az` lives)
 scripts/
   crew-diag.sh          container revisions, logs, PRs, issues, token usage
@@ -80,61 +78,31 @@ Four things need you before (or right after) the deploy:
    re-run resets the live app's image back to helloworld and mints a
    new revision, killing the running crew until the next push. To add
    infrastructure to a live crew, deploy a standalone template
-   instead — see the metric alerts below.
+   instead.
 
-## Kill switch (the spend cutoff)
+## Spend cutoff (no automatic kill)
 
 Azure has no native spend cap on pay-as-you-go — budgets only alert.
-So the cutoff is wired, not assumed:
+There is no automatic kill in this deployment: no Cost Management
+budget, no Action Group, no Logic App. The Nov 20 kill switch
+(a $40-per-metric alert that deleted the whole resource group) was
+removed Nov 21, 2026, along with its template (`infra/alerts.bicep`
+is deleted in this change) — nothing in Azure will delete the group
+on its own. The cutoff is in code, not wired:
 
-- A **$200 Cost Management budget** on the crew resource group.
-  50% and 90% notify by email only. **95% (~$190) fires an Action
-  Group**, which calls a **Logic App** that deletes the crew resource
-  group. Shutdown is a delete, not a pause.
-- A **Recurrence trigger** in the same Logic App fires at the hard
-  deadline, **Sat Nov 21 5pm ET**, whether or not the budget fired.
-  Deleting the group also deletes the Logic App, so it never fires
-  twice.
-- The Logic App's managed identity holds a **custom role with exactly
-  one permission** (`Microsoft.Resources/subscriptions/resourceGroups/delete`)
-  at subscription scope — deleting a resource group is a
-  subscription-level operation, so the permission cannot be scoped to
-  one group. The blast radius is bounded by the workflow, which
-  hardcodes the crew resource group name in the DELETE URI. See
-  `infra/killswitch-role.bicep` for the full trade-off.
+- **$190 in-code stop.** The crew stops itself at $190 of the $200
+  budget (see below). Nothing else enforces it.
+- **Hard deadline, Sat Dec 26 3:08:36pm ET.** The crew refuses to
+  start past it. It does not delete anything.
 - **Manual kill, any time:** `az group delete --name rg-agent-crew --yes --no-wait`
 
 ## Real-time cost guard
 
-The budget above is a backstop, not a real-time cutoff — Cost
-Management data lands 8–24h late. Two faster layers sit in front
-of it:
+The only guard is the in-code tracker — there is no Azure-side
+backstop, so a slow drip over several days is caught only by the
+tracker and the deadline.
 
-- **Metric alerts on token usage (primary).** `infra/alerts.bicep`
-  deploys four metric alert rules on the Foundry account — input and
-  output tokens per deployment (`gpt-6-2-astra`, `gpt-6-2-sol`) —
-  each set at $40 of tokens in a rolling 24h window, firing the same
-  Action Group → the same Logic App. Worst case at first fire: just
-  under 4 × $40 ≈ $160 plus a few minutes of alert latency, under
-  the $190 stop. Evaluation runs every minute; metric data lands in
-  minutes, not hours. Deploy it standalone (it touches only alert
-  rules, never the container app):
-  ```
-  az deployment group create -g rg-agent-crew \
-    --template-file infra/alerts.bicep
-  ```
-  Or one alert rule by hand:
-  ```
-  az monitor metrics alert create -g rg-agent-crew \
-    -n astra-input-40usd --scopes <foundry-account-id> \
-    --condition "total ProcessedPromptTokens > 5000000 where ModelDeploymentName includes gpt-6-2-astra" \
-    --window-size 1d --evaluation-frequency 1m --severity 0 \
-    --action <action-group-id>
-  ```
-  Honest limit: a 24h window cannot see spend spread over several
-  days — a slow drip is still caught by the budget, the deadline,
-  and the in-code tracker below.
-- **Token counting in the crew (second layer).** Every model call
+- **Token counting in the crew.** Every model call
   goes through `CountingChatClient` (`crew/clients.py`), which
   prices the call from the usage the API reports on the response —
   input, cached-input, and output tokens per model — and accumulates
@@ -145,11 +113,12 @@ of it:
   still cross the line (the check runs before the call, not after),
   so the overshoot past $190 is bounded by a single call's cost.
 
-Honest limit: Cost Management evaluates budgets roughly every 24
-hours on cost data that lands 8–24 hours late, so the 95% trigger is
-a backstop, not a real-time cutoff. The 95% threshold (not 100%)
-leaves headroom for that lag, and the Recurrence trigger is the hard
-deadline that does not depend on cost data at all.
+Honest limit: the tracker prices calls from API-reported usage, so
+it sees spend in minutes, not hours — but it only runs while the
+crew runs, and it prices at assumed per-token rates, not from
+billing. A slow drip is still caught by the $190 stop and the
+deadline, and by `scripts/crew-spend.sh`, which reads the ledger's
+live spend total.
 
 ## Compute: Container Apps, not a VM
 
@@ -192,7 +161,7 @@ Open questions, flagged in the template rather than guessed:
 
 Checked before this push (Nov 19):
 
-- `bicep build` and `bicep lint` pass on both templates (Bicep CLI
+- `bicep build` and `bicep lint` pass on the template (Bicep CLI
   0.49.2). One warning remains: BCP037, `modelProviderData` not in
   the Bicep type for deployments. That property is required — it is
   how the marketplace offer gets auto-signed — and Microsoft's own
@@ -200,8 +169,9 @@ Checked before this push (Nov 19):
   version. The property is present in the compiled ARM JSON.
 - Compiled ARM JSON inspected: all 19 resources present (vault,
   Log Analytics, 2 Foundry accounts, 2 projects, 3 deployments,
-  Container Apps environment + app, 4 role assignments, Logic App,
-  Action Group, budget, kill-switch module).
+  Container Apps environment + app, 6 role assignments, storage
+  account + ledger container). No Logic App, Action Group, or
+  budget — there is no automatic kill.
 - `shellcheck` clean on `deploy.sh`.
 - Model names, versions, and regions checked against Microsoft Learn
   and the Claude on Foundry starter kit (see the table above).

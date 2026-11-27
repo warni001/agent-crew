@@ -45,8 +45,9 @@ Planner, Builder, Reviewer, Merger. Read this file first, then
   Actions read-only. Full flow in `docs/crew-instructions.md` and
   the README.
 - **Stop rules:** stop work at $190 of the $200 budget or past the
-  hard deadline, Sat Nov 21 5pm ET. The kill switch deletes the
-  resource group either way — do not rely on it; stop yourself first.
+  hard deadline, Sat Dec 26 3:08:36pm ET. There is no kill switch
+  (removed Nov 21, 2026) — nothing in Azure stops you or deletes
+  the resource group; stop yourself first.
 - **Pin:** `agent-framework==1.26.0` exactly. Versions 1.26.1/1.26.2
   were hijacked and removed — never install them.
 - **Tests:** offline only. Mock the chat clients and the `gh`

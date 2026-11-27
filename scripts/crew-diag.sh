@@ -20,4 +20,6 @@ echo "===== open crew-task issues ====="
 gh issue list -R warni001/agent-crew --label crew-task --state open
 echo
 echo "===== token usage, Foundry account (last 24h) ====="
-az monitor metrics list --resource /subscriptions/2b5dd0c2-bac8-45dc-bc60-6d21c1362cf8/resourceGroups/rg-agent-crew/providers/Microsoft.CognitiveServices/accounts/foundry-gpt-vaxvu3c2 --metric ProcessedPromptTokens GeneratedTokens --interval PT1H --aggregation Total -o table
+SUB="$(az account show --query id -o tsv)"
+GPT_ACCT="$(az cognitiveservices account list -g rg-agent-crew --query "[?contains(name, 'foundry-gpt')].name | [0]" -o tsv)"
+az monitor metrics list --resource "/subscriptions/$SUB/resourceGroups/rg-agent-crew/providers/Microsoft.CognitiveServices/accounts/$GPT_ACCT" --metric ProcessedPromptTokens GeneratedTokens --interval PT1H --aggregation Total -o table
