@@ -251,7 +251,7 @@ def test_changes_requested_sign_off_records_stalled(main_mod, config_mod, ledger
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(
         main_mod, "run_task",
         _run_task_recording_sign_off(
@@ -284,7 +284,7 @@ def test_run_one_task_sets_up_the_task_branch(main_mod, config_mod, ledger_mod, 
     seen: list[str] = []
     ensure = mock.Mock(side_effect=lambda branch: branch)
     monkeypatch.setattr(main_mod, "ensure_task_branch", ensure)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
 
     async def _run(workflow, task, config):
         seen.append(task)
@@ -317,7 +317,7 @@ def test_run_one_task_continues_without_a_branch_when_setup_fails(main_mod, conf
         main_mod, "ensure_task_branch",
         mock.Mock(side_effect=RuntimeError("no git")),
     )
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
 
     async def _run(workflow, task, config):
         seen.append(task)
@@ -343,7 +343,7 @@ def test_unreadable_sign_off_ledger_stalls(
     error = OSError("unreadable sign-off ledger")
     reads = [error] if failure == "initial" else [[], error]
     monkeypatch.setattr(ledger_mod.Ledger, "sign_offs", mock.Mock(side_effect=reads))
-    monkeypatch.setattr(main_mod, "build_workflow", mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", mock.Mock())
     monkeypatch.setattr(
         main_mod, "run_task", _run_task_recording_sign_off(ledger_mod, path, ["output"]),
     )
@@ -379,7 +379,7 @@ def test_changes_requested_plus_approved_finishes(main_mod, config_mod, ledger_m
         )
         return ["merged PR #8"]
 
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(main_mod, "run_task", _run)
     stalled = mock.Mock(return_value="https://example/2")
     monkeypatch.setattr(main_mod, "report_stalled", stalled)
@@ -397,7 +397,7 @@ def test_no_sign_off_records_stalled(main_mod, config_mod, ledger_mod, tmp_path,
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
     stalled = mock.Mock(return_value="https://example/2")
     monkeypatch.setattr(main_mod, "report_stalled", stalled)
@@ -411,12 +411,56 @@ def test_no_sign_off_records_stalled(main_mod, config_mod, ledger_mod, tmp_path,
     done.assert_not_called()
 
 
+def test_builder_no_action_stalls(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """A builder that made no tool call stalls as builder_no_action,
+    not no_review — the Nov 27 #75 clean re-test returned an empty
+    builder response, and no_review blamed the review for a build
+    that never happened."""
+    from agent_framework import AgentResponse, Content, Message
+
+    def _resp(name, text):
+        return AgentResponse(
+            messages=[
+                Message(
+                    role="assistant",
+                    contents=[Content.from_text(text)],
+                    author_name=name,
+                )
+            ],
+            response_id=f"resp-{name}",
+        )
+
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
+    monkeypatch.setattr(
+        main_mod, "run_task",
+        mock.AsyncMock(return_value=[
+            _resp("planner", "plan is ready"),
+            _resp("builder", ""),
+            _resp("reviewer", "no PR to review"),
+            _resp("merger", "nothing to merge"),
+        ]),
+    )
+    stalled = mock.Mock(return_value="https://example/2")
+    monkeypatch.setattr(main_mod, "report_stalled", stalled)
+    done = mock.Mock()
+    monkeypatch.setattr(main_mod, "report_done", done)
+    assert main_mod.run_one_task(config, ledger, "do the thing") == 1
+    task_events = [e for e in ledger.entries() if e["event"].startswith("task_")]
+    assert [e["event"] for e in task_events] == ["task_started", "task_stalled"]
+    assert task_events[1]["reason"] == "builder_no_action"
+    assert stalled.call_args.kwargs["reason"] == "builder_no_action"
+    done.assert_not_called()
+
+
 def test_approved_sign_off_finishes(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
     """An approved sign-off during the run lets it finish."""
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(
         main_mod, "run_task",
         _run_task_recording_sign_off(ledger_mod, path, ["merged PR #1"]),
@@ -434,7 +478,7 @@ def test_stale_sign_off_before_run_is_ignored(main_mod, config_mod, ledger_mod, 
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
     _record_sign_off(ledger_mod, path, verdict="changes_requested", pr_number=3, notes="old")
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(
         main_mod, "run_task",
         _run_task_recording_sign_off(ledger_mod, path, ["merged PR #4"]),
@@ -454,7 +498,7 @@ def test_ledger_failure_does_not_kill_run(main_mod, config_mod, ledger_mod, tmp_
     ledger = mock.Mock()
     ledger.record.side_effect = PermissionError("Permission denied")
     ledger.entries.return_value = []
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(
         main_mod, "run_task",
         _run_task_recording_sign_off(ledger_mod, path, ["done"]),
@@ -470,7 +514,7 @@ def test_main_explicit_task_runs_once(main_mod, ledger_mod, tmp_path, monkeypatc
     monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", PROJECT_ENDPOINT)
     monkeypatch.setenv("KEY_VAULT_URL", "https://kv-example.vault.azure.net/")
     monkeypatch.setenv("CREW_LEDGER_PATH", path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     # One-shot runs have no issue number: the branch is the task hash.
     monkeypatch.setattr(
         main_mod, "ensure_task_branch", lambda branch: branch,
@@ -504,7 +548,7 @@ def test_stalled_run_closes_and_tags_original_issue(main_mod, config_mod, ledger
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
     stalled, close, tag = _stall_mocks(main_mod, monkeypatch)
     assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=42) == 1
@@ -519,7 +563,7 @@ def test_review_stalled_run_closes_with_review_reason(main_mod, config_mod, ledg
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(
         main_mod, "run_task",
         _run_task_recording_sign_off(
@@ -549,7 +593,7 @@ def test_review_unavailable_stall_closes_source_issue_once(
         ledger_mod.Ledger, "sign_offs",
         mock.Mock(side_effect=OSError("unreadable sign-off ledger")),
     )
-    monkeypatch.setattr(main_mod, "build_workflow", mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", mock.Mock())
     monkeypatch.setattr(
         main_mod, "run_task",
         _run_task_recording_sign_off(ledger_mod, path, ["output"]),
@@ -575,7 +619,7 @@ def test_stalled_run_without_issue_number_skips_marking(main_mod, config_mod, le
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
     stalled, close, tag = _stall_mocks(main_mod, monkeypatch)
     assert main_mod.run_one_task(config, ledger, "do the thing") == 1
@@ -592,10 +636,10 @@ def test_done_or_failed_run_closes_only_source_issue(
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     if failed:
         run = mock.AsyncMock(side_effect=RuntimeError("workflow failed"))
-        comment = "Failed: the workflow raised an exception."
+        comment = "Failed: the run raised an exception."
         event = "task_failed"
     else:
         run = _run_task_recording_sign_off(ledger_mod, path, ["merged PR #1"])
@@ -623,7 +667,7 @@ def test_stall_tolerates_close_and_label_failure(main_mod, config_mod, ledger_mo
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
-    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     monkeypatch.setattr(main_mod, "run_task", mock.AsyncMock(return_value=["done"]))
     stalled, close, tag = _stall_mocks(main_mod, monkeypatch)
     close.side_effect = RuntimeError("gh down")

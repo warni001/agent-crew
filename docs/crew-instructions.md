@@ -164,27 +164,40 @@ a new issue to re-queue it.
 A run is a single pass: planner, builder, reviewer, merger, in
 that order, each seeing only the previous agent's response. There
 is no round cap and no replanning. The reviewer is the gate: the
-merger merges only on an approved sign-off. If the reviewer
-requests changes, or no review is recorded at all, the run settles
-as stalled, not finished — the crew records `task_stalled` and
-posts a `[crew] Stalled:` issue, and the loop does not re-run the
-task on its own. Re-queue a stalled task with a refined issue that
-addresses the review notes.
+merger merges only on an approved sign-off. If the builder makes
+no tool call even after its retries, the run stalls as
+`builder_no_action`. If the reviewer requests changes, or no
+review is recorded at all, the run settles as stalled, not
+finished — the crew records `task_stalled` and posts a `[crew]
+Stalled:` issue, and the loop does not re-run the task on its own.
+Re-queue a stalled task with a refined issue that addresses the
+review notes.
 
 ## Orchestration (sequential — verified against agent-framework 1.26.0)
 
 - Sequential lives in `agent_framework.orchestrations` — there is
-  no `agent_framework.magentic` module.
-- Build it with `SequentialBuilder(participants=[...],
-  chain_only_agent_responses=True)` (`.build()`). With
-  `chain_only_agent_responses=True` each agent receives only the
-  previous agent's response messages, not the full conversation —
-  that is what keeps each agent's Responses chain free of other
-  agents' tool transcripts (a foreign tool result in your chain
-  400s: "No tool call found for function call output"). Each agent
-  runs with the framework default `store=True`; do not set
-  `store=False` — that was the Nov 19 Magentic workaround, and it
-  re-sends the full history on every call.
+  no `agent_framework.magentic` module. But the crew no longer
+  builds a `SequentialBuilder` workflow: `run_task` runs the four
+  role agents directly, in order, with `await agent.run(messages,
+  session=agent.create_session())` — each agent on its own fresh
+  session, each receiving only the previous agent's response
+  messages, not the full conversation. That is the same last-agent
+  message passing `chain_only_agent_responses=True` used to give,
+  now in plain code — because the builder needs a gate between its
+  turn and the reviewer's, and a fixed workflow chain has nowhere
+  to put one. Passing only the previous response keeps each agent's
+  Responses chain free of other agents' tool transcripts (a foreign
+  tool result in your chain 400s: "No tool call found for function
+  call output"). Each agent runs with the framework default
+  `store=True`; do not set `store=False` — that was the Nov 19
+  Magentic workaround, and it re-sends the full history on every
+  call.
+- Builder action gate (Nov 27, #75): after the builder's turn,
+  `run_task` counts the function calls in its response. Zero means
+  it did not act, so the builder is re-invoked on the same session
+  with a forced nudge — at most 3 attempts total (the first plus
+  2 retries; the cap is a spend bound). If it still makes no call,
+  the run stalls with reason `builder_no_action`, not `no_review`.
 - Agents are `agent_framework.Agent(client, instructions, ...)` —
   the chat client is the first positional argument. There is no
   `ChatAgent` in 1.26.0; do not use that name.

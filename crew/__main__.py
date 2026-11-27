@@ -35,7 +35,8 @@ from .feedback import (
 )
 from .blob_ledger import build_ledger
 from .ledger import Ledger
-from .orchestration import build_workflow, format_run_summary, run_task
+from .orchestration import builder_tool_calls, format_run_summary, run_task
+from .roles import build_roles
 from .spend import TRACKER, reset_spend, restore_spend, spent_usd
 from .tools import ensure_task_branch, task_branch_name
 
@@ -190,24 +191,26 @@ def run_one_task(
 ) -> int:
     """Run a single task through the crew. Returns the exit code.
 
-    The reviewer is the gate: after the workflow finishes, the run
-    settles as stalled — not finished — when the reviewer requested
-    changes and nothing was approved, when no review was recorded,
-    or when the sign-off ledger could not be read. A run that records
-    task_finished with zero PRs is the Nov 19 hollow-done mistake;
-    the gate exists to stop it repeating. An approved sign-off is
-    what lets a run finish. A changes_requested on one PR is a
-    per-PR blocker, not a task blocker: a sweep that approved (and
-    merged) other PRs finishes, and the blocked PRs stay open for a
-    later task. When supplied, `issue_number` identifies the original
-    issue to close with the outcome. Stalls also tag it.
+    The reviewer is the gate: after the run finishes, the run
+    settles as stalled — not finished — when the builder made no
+    tool call even after its retries (`builder_no_action`), when
+    the reviewer requested changes and nothing was approved, when
+    no review was recorded, or when the sign-off ledger could not
+    be read. A run that records task_finished with zero PRs is the
+    Nov 19 hollow-done mistake; the gate exists to stop it
+    repeating. An approved sign-off is what lets a run finish. A
+    changes_requested on one PR is a per-PR blocker, not a task
+    blocker: a sweep that approved (and merged) other PRs finishes,
+    and the blocked PRs stay open for a later task. When supplied,
+    `issue_number` identifies the original issue to close with the
+    outcome. Stalls also tag it.
     """
     log = logging.getLogger("crew")
-    # The task branch is set up in code before the workflow runs: the
+    # The task branch is set up in code before the run: the
     # builder never decides about branches, so a branch refusal cannot
     # stall the run (Nov 27, #75). A failure here degrades to the old
-    # behaviour — the workflow runs without the branch line — instead
-    # of failing the run. The branch line goes only to the workflow
+    # behaviour — the run continues without the branch line — instead
+    # of failing the run. The branch line goes only to the run
     # input; the ledger keeps the original task text, so settlement
     # matching is unchanged.
     branch = None
@@ -226,7 +229,7 @@ def run_one_task(
         log.warning("could not read sign-off ledger: %s", exc)
         before = None
     try:
-        workflow = build_workflow(config)
+        roles = build_roles(config)
         workflow_task = task
         if branch is not None:
             workflow_task = (
@@ -234,11 +237,11 @@ def run_one_task(
                 "checked out for this task — do not create another branch; "
                 "confirm with `git branch --show-current` if unsure)."
             )
-        outputs = asyncio.run(run_task(workflow, workflow_task, config))
+        outputs = asyncio.run(run_task(roles, workflow_task, config))
     except Exception as exc:  # noqa: BLE001 - report the failure, then exit 1
         _record(ledger, "task_failed", task=task, error=str(exc))
         log.error("task failed: %s", exc)
-        _settle_task_issue(config, issue_number, "Failed: the workflow raised an exception.")
+        _settle_task_issue(config, issue_number, "Failed: the run raised an exception.")
         return 1
 
     # One summary for every settlement path: the header (agents ran,
@@ -248,6 +251,29 @@ def run_one_task(
     # produced nothing — this is the fix for that.
     sign_offs = _sign_offs_since(config, before) if before is not None else None
     summary = format_run_summary(outputs, sign_offs)
+    if builder_tool_calls(outputs) == 0:
+        # The builder made no tool call even after its retries, so
+        # there is nothing for the reviewer to review. This stalls
+        # as builder_no_action, not no_review — no_review would say
+        # the review failed when the build never happened. Checked
+        # first: a missing sign-off is the consequence here, not
+        # the cause. builder_tool_calls returns None when the
+        # outputs carry no message structure (plain strings), so
+        # those runs fall through to the existing gates below.
+        _record(ledger, "task_stalled", task=task, reason="builder_no_action")
+        log.warning("task stalled (builder made no tool call):\n%s", summary)
+        try:
+            url = report_stalled(
+                config.repo, task, summary, reason="builder_no_action"
+            )
+            log.info("stalled issue posted: %s", url)
+        except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
+            print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
+        _settle_task_issue(
+            config, issue_number,
+            f"Stalled: builder_no_action\n\n{summary}", stalled=True,
+        )
+        return 1
     if sign_offs is None:
         # The sign-off ledger could not be read, so no approval can
         # be verified: stall rather than finishing without one. The

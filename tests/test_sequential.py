@@ -1,16 +1,21 @@
 """Sequential orchestration: planner -> builder -> reviewer -> merger,
 one pass, each agent seeing only the previous agent's response.
 
-Contract (see crew/orchestration.py): SequentialBuilder with
-chain_only_agent_responses=True. That is the whole 400 fix — Magentic
-shared every participant's tool transcript with every other
-participant, and under Responses chaining a foreign function_result
-with no function_call in the chain 400s. Sequential passes only the
-previous agent's response messages, and each executor owns a fresh
-session, so a tool transcript enters the next agent's chain as a
-matched call+result pair on its first, stateless call. Agents run on
-the framework default store=True; store=False was the Nov 19
-workaround and is gone. No manager agent exists anymore.
+Contract (see crew/orchestration.py): `run_task` runs the four role
+agents directly, in order, each on its own fresh session, each
+receiving only the previous agent's response messages. That is the
+whole 400 fix — Magentic shared every participant's tool transcript
+with every other participant, and under Responses chaining a foreign
+function_result with no function_call in the chain 400s. The
+explicit sequence passes only the previous response, and each agent
+owns a fresh session, so a tool transcript enters the next agent's
+chain as a matched call+result pair on its first, stateless call.
+Agents run on the framework default store=True; store=False was the
+Nov 19 workaround and is gone. No manager agent exists anymore.
+The sequence replaced the fixed SequentialBuilder chain (Nov 27,
+#75) so a gate can sit after the builder: when the builder returns
+with zero tool calls, it is re-invoked on the same session with a
+forced nudge, up to 3 attempts total.
 
 All model calls are faked; no network.
 """
@@ -21,7 +26,6 @@ import asyncio
 from types import SimpleNamespace
 
 from agent_framework import AgentResponse, Content, Message
-from agent_framework.orchestrations import SequentialBuilder
 
 from conftest import require_crew
 
@@ -34,6 +38,7 @@ class FakeAgent:
     def __init__(self, replies, name="worker"):
         self.replies = list(replies)
         self.calls = []
+        self.sessions = []
         self.id = f"fake-{name}"
         self.name = name
         self.description = f"fake {name} agent"
@@ -46,6 +51,7 @@ class FakeAgent:
 
     async def run(self, messages, *, session=None, **kwargs):
         self.calls.append(list(messages))
+        self.sessions.append(session)
         return self.replies.pop(0)
 
 
@@ -82,60 +88,98 @@ def _text_response(text):
     )
 
 
+def _tool_response(text):
+    """A builder turn that acted: one call + result + final text."""
+    return AgentResponse(
+        messages=[
+            Message(role="assistant", contents=[
+                Content.from_function_call(
+                    call_id="call_1", name="read_file",
+                    arguments='{"path": "crew/roles.py"}',
+                ),
+            ]),
+            Message(role="tool", contents=[
+                Content.from_function_result(call_id="call_1", result="file contents"),
+            ]),
+            Message(role="assistant", contents=[Content.from_text(text)]),
+        ],
+        response_id="resp-tool",
+    )
+
+
 def _contents(messages):
     return [c for m in messages for c in m.contents]
 
 
-def test_build_workflow_is_sequential_with_chain_only_responses(monkeypatch):
-    """build_workflow wires planner->builder->reviewer->merger with
-    chain_only_agent_responses=True and no manager."""
-    orchestration_mod = require_crew("orchestration")
-    seen = {}
-
-    class CapturingBuilder:
-        def __init__(self, **kwargs):
-            seen.update(kwargs)
-
-        def build(self):
-            return object()
-
-    roles = {name: FakeAgent([], name=name) for name in ("planner", "builder", "reviewer", "merger")}
-    monkeypatch.setattr(orchestration_mod, "build_roles", lambda config: roles)
-    monkeypatch.setattr(orchestration_mod, "SequentialBuilder", CapturingBuilder)
+def test_run_task_sequences_agents_with_only_previous_response(monkeypatch):
+    """run_task runs planner->builder->reviewer->merger in order, each
+    agent on its own fresh session, each receiving only the previous
+    agent's response messages — the explicit sequence that replaced
+    the fixed SequentialBuilder chain, so a gate can sit after the
+    builder."""
+    orch_mod = require_crew("orchestration")
     config_mod = require_crew("config")
+    roles = {
+        name: FakeAgent([_text_response(f"{name} did its part")], name=name)
+        for name in ("planner", "reviewer", "merger")
+    }
+    # The builder's reply must carry a tool call: a text-only builder
+    # turn trips the action gate and is retried (see test_builder_gate).
+    roles["builder"] = FakeAgent(
+        [_tool_response("builder did its part")], name="builder"
+    )
+    monkeypatch.setattr(orch_mod, "spent_usd", lambda: 0.0)
     config = config_mod.CrewConfig(foundry_project_endpoint=PROJECT_ENDPOINT)
-    assert orchestration_mod.build_workflow(config) is not None
-    assert [a.name for a in seen["participants"]] == ["planner", "builder", "reviewer", "merger"]
-    assert seen["chain_only_agent_responses"] is True
-    # Every agent's response surfaces as an intermediate event, so the
-    # run returns the whole narrative, not just the merger's output.
-    # output_from must name the merger explicitly: with
-    # intermediate_output_from="all_other" alone, the framework
-    # designates no output at all.
-    assert [a.name for a in seen["output_from"]] == ["merger"]
-    assert seen["intermediate_output_from"] == "all_other"
-    assert "manager_agent" not in seen
-    assert "manager" not in seen
+    outputs = asyncio.run(orch_mod.run_task(roles, "do the thing", config))
+    assert [str(o) for o in outputs] == [
+        "planner did its part",
+        "builder did its part",
+        "reviewer did its part",
+        "merger did its part",
+    ]
+    # The planner gets the task as one user message; every later
+    # agent gets only the previous response's messages.
+    planner_input = roles["planner"].calls[0]
+    assert len(planner_input) == 1
+    assert planner_input[0].role == "user"
+    assert _contents(planner_input)[0].text == "do the thing"
+    assert [c.text for c in _contents(roles["builder"].calls[0]) if c.type == "text"] == [
+        "planner did its part"
+    ]
+    assert [c.text for c in _contents(roles["reviewer"].calls[0]) if c.type == "text"] == [
+        "builder did its part"
+    ]
+    assert [c.text for c in _contents(roles["merger"].calls[0]) if c.type == "text"] == [
+        "reviewer did its part"
+    ]
+    # One fresh session per agent — no session is shared across roles.
+    sessions = [roles[name].sessions[0] for name in ("planner", "builder", "reviewer", "merger")]
+    assert len(set(map(id, sessions))) == 4
 
 
-def test_next_agent_gets_matched_call_and_result_pair():
+def test_next_agent_gets_matched_call_and_result_pair(monkeypatch):
     """The previous agent's tool transcript reaches the next agent as
     a matched call+result pair — never an orphan function_result.
 
     An orphan output is exactly what 400s under chaining ("No tool
-    call found for function call output"). The real SequentialBuilder
-    with chain_only_agent_responses=True is exercised end to end;
-    only the agents are fake.
+    call found for function call output"). The explicit sequence in
+    run_task passes the previous response's messages verbatim; only
+    the agents are fake.
     """
-    worker = FakeAgent([_pair_response()], name="worker")
-    receiver = FakeAgent([_text_response("got it")], name="receiver")
-    workflow = SequentialBuilder(
-        participants=[worker, receiver], chain_only_agent_responses=True
-    ).build()
-    outputs = asyncio.run(workflow.run("do the thing")).get_outputs()
-    assert [str(o) for o in outputs] == ["got it"]
-    assert len(receiver.calls) == 1
-    received = _contents(receiver.calls[0])
+    orch_mod = require_crew("orchestration")
+    config_mod = require_crew("config")
+    roles = {
+        "planner": FakeAgent([_pair_response()], name="planner"),
+        "builder": FakeAgent([_tool_response("got it")], name="builder"),
+        "reviewer": FakeAgent([_text_response("ok")], name="reviewer"),
+        "merger": FakeAgent([_text_response("done")], name="merger"),
+    }
+    monkeypatch.setattr(orch_mod, "spent_usd", lambda: 0.0)
+    config = config_mod.CrewConfig(foundry_project_endpoint=PROJECT_ENDPOINT)
+    outputs = asyncio.run(orch_mod.run_task(roles, "do the thing", config))
+    assert [str(o) for o in outputs] == ["plan is ready", "got it", "ok", "done"]
+    assert len(roles["builder"].calls) == 1
+    received = _contents(roles["builder"].calls[0])
     calls = {c.call_id for c in received if c.type == "function_call"}
     results = {c.call_id for c in received if c.type == "function_result"}
     assert calls == {"call_1"}
@@ -144,16 +188,21 @@ def test_next_agent_gets_matched_call_and_result_pair():
     assert any(c.type == "text" and c.text == "plan is ready" for c in received)
 
 
-def test_next_agent_gets_only_the_previous_response():
-    """chain_only_agent_responses passes response messages, not the
-    full conversation: the receiver never sees the original task."""
-    worker = FakeAgent([_pair_response()], name="worker")
-    receiver = FakeAgent([_text_response("got it")], name="receiver")
-    workflow = SequentialBuilder(
-        participants=[worker, receiver], chain_only_agent_responses=True
-    ).build()
-    asyncio.run(workflow.run("do the thing"))
-    received = receiver.calls[0]
+def test_next_agent_gets_only_the_previous_response(monkeypatch):
+    """The sequence passes response messages, not the full
+    conversation: the receiver never sees the original task."""
+    orch_mod = require_crew("orchestration")
+    config_mod = require_crew("config")
+    roles = {
+        "planner": FakeAgent([_pair_response()], name="planner"),
+        "builder": FakeAgent([_tool_response("got it")], name="builder"),
+        "reviewer": FakeAgent([_text_response("ok")], name="reviewer"),
+        "merger": FakeAgent([_text_response("done")], name="merger"),
+    }
+    monkeypatch.setattr(orch_mod, "spent_usd", lambda: 0.0)
+    config = config_mod.CrewConfig(foundry_project_endpoint=PROJECT_ENDPOINT)
+    asyncio.run(orch_mod.run_task(roles, "do the thing", config))
+    received = roles["builder"].calls[0]
     assert len(received) == 3  # call, result, text — nothing else
     assert not any("do the thing" in (c.text or "") for c in _contents(received))
 
