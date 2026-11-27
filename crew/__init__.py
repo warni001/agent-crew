@@ -1,7 +1,6 @@
 """Autonomous multi-agent coding crew on Microsoft Agent Framework.
 
-One frontier model per role (Planner + Reviewer on Astra, Builder +
-Merger on Sol), Magentic orchestration, GitHub issues as the feedback
+One model for all roles (gpt-5.4-mini), Magentic orchestration, GitHub issues as the feedback
 channel, and a budget/deadline guard that stops the crew at 95% of the
 $200 budget or the Sat Dec 26 3:08:36pm ET deadline — whichever comes first.
 """

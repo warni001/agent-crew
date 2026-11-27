@@ -81,8 +81,8 @@ def main() -> None:
     ledger_prompt = ORCHESTRATOR_PROGRESS_LEDGER_PROMPT.format(task=TASK, team=TEAM, names=NAMES)
     hello = "Say hello in one sentence."
     if cog_token:
-        show("v1 + preview + hello", call(V1_URL, cog_token, "gpt-6-2-astra", hello))
-        show("v1 + preview + ledger", call(V1_URL, cog_token, "gpt-6-2-astra", ledger_prompt))
+        show("v1 + preview + hello", call(V1_URL, cog_token, "gpt-5-4-mini", hello))
+        show("v1 + preview + ledger", call(V1_URL, cog_token, "gpt-5-4-mini", ledger_prompt))
 
 
 main()

@@ -44,7 +44,7 @@ def clean_tracker(spend_mod):
     spend_mod.TRACKER.on_milestone = None
 
 
-def _client(clients_mod, model="gpt-6-2-astra"):
+def _client(clients_mod, model="gpt-5-4-mini"):
     """CountingChatClient without __init__: only .model is read."""
     client = object.__new__(clients_mod.CountingChatClient)
     client.model = model
@@ -56,7 +56,7 @@ def _run(client, messages):
     return asyncio.run(client.get_response(messages))
 
 
-def _response(model="gpt-6.2-astra", usage=None):
+def _response(model="gpt-5.4-mini", usage=None):
     return ChatResponse(
         messages=[Message(role="assistant", contents=["done"])],
         model=model,
@@ -76,31 +76,32 @@ def test_call_records_usage(clients_mod, spend_mod, monkeypatch):
     result = _run(client, [Message(role="user", contents=["hi"])])
     assert result.text == "done"
     assert len(calls) == 1
-    # 1M Astra input ($8) + 100k Astra output ($4).
-    assert spend_mod.spent_usd() == pytest.approx(12.0)
+    # 1M mini input ($0.83) + 100k mini output ($0.495).
+    assert spend_mod.spent_usd() == pytest.approx(1.325)
 
 
 def test_response_model_prices_the_call(clients_mod, spend_mod, monkeypatch):
-    # The client was built for Astra; the response says Sol served it.
-    client = _client(clients_mod, model="gpt-6-2-astra")
+    # The client was built for an unknown model (fallback Astra rates);
+    # the response says mini served it, so mini rates price the call.
+    client = _client(clients_mod, model="gpt-9-2-mystery")
 
     async def fake_get_response(self, messages, **kwargs):
-        return _response(model="gpt-6.2-sol", usage={"input_token_count": 1_000_000})
+        return _response(model="gpt-5.4-mini", usage={"input_token_count": 1_000_000})
 
     monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
     _run(client, [Message(role="user", contents=["hi"])])
-    assert spend_mod.spent_usd() == pytest.approx(2.0)
+    assert spend_mod.spent_usd() == pytest.approx(0.83)
 
 
 def test_client_model_is_the_fallback(clients_mod, spend_mod, monkeypatch):
-    client = _client(clients_mod, model="gpt-6-2-sol")
+    client = _client(clients_mod, model="gpt-5-4-mini")
 
     async def fake_get_response(self, messages, **kwargs):
         return _response(model=None, usage={"output_token_count": 1_000_000})
 
     monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
     _run(client, [Message(role="user", contents=["hi"])])
-    assert spend_mod.spent_usd() == pytest.approx(10.0)
+    assert spend_mod.spent_usd() == pytest.approx(4.95)
 
 
 def test_missing_usage_costs_zero(clients_mod, spend_mod, monkeypatch):
@@ -136,11 +137,11 @@ def test_one_call_may_cross_the_line(clients_mod, spend_mod, monkeypatch):
     client = _client(clients_mod)
 
     async def fake_get_response(self, messages, **kwargs):
-        return _response(usage={"input_token_count": 1_000_000})  # +$8.00
+        return _response(usage={"input_token_count": 1_000_000})  # +$0.83
 
     monkeypatch.setattr(OpenAIChatClient, "get_response", fake_get_response)
     _run(client, [Message(role="user", contents=["hi"])])
-    assert spend_mod.spent_usd() == pytest.approx(197.99)
+    assert spend_mod.spent_usd() == pytest.approx(190.82)
     with pytest.raises(spend_mod.SpendLimitExceeded):
         client.get_response([Message(role="user", contents=["hi"])])
 
@@ -170,8 +171,8 @@ def test_make_chat_client_builds_counting_client(clients_mod, roles_mod, monkeyp
     config = config_mod.CrewConfig(
         foundry_project_endpoint="https://foundry-gpt-vaxvu3c2.services.ai.azure.com/api/projects/crew"
     )
-    roles_mod.make_chat_client(config, "gpt-6-2-sol")
-    assert made["model"] == "gpt-6-2-sol"
+    roles_mod.make_chat_client(config, "gpt-5-4-mini")
+    assert made["model"] == "gpt-5-4-mini"
     assert made["azure_endpoint"] == config.resolve_azure_openai_endpoint()
     assert made["api_version"] == "preview"
     assert "credential" in made

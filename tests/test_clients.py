@@ -40,11 +40,11 @@ def test_build_client_uses_given_endpoint_and_model(clients_mod, mock_chat_clien
         return mock_chat_client
 
     client = clients_mod.build_chat_client(
-        CLASSIC_ENDPOINT, "gpt-6-2-astra", client_factory=factory
+        CLASSIC_ENDPOINT, "gpt-5-4-mini", client_factory=factory
     )
     assert client is mock_chat_client
     assert created["endpoint"] == CLASSIC_ENDPOINT
-    assert created["model"] == "gpt-6-2-astra"
+    assert created["model"] == "gpt-5-4-mini"
     assert created["kwargs"]["api_version"] == PROVEN_API_VERSION
 
 
@@ -56,11 +56,11 @@ def test_build_client_passes_no_hardcoded_endpoint(clients_mod, mock_chat_client
         seen.append((endpoint, model))
         return mock_chat_client
 
-    clients_mod.build_chat_client("https://a.example/", "gpt-6-2-astra", client_factory=factory)
-    clients_mod.build_chat_client("https://b.example/", "gpt-6-2-sol", client_factory=factory)
+    clients_mod.build_chat_client("https://a.example/", "gpt-5-4-mini", client_factory=factory)
+    clients_mod.build_chat_client("https://b.example/", "gpt-5-mini", client_factory=factory)
     assert seen == [
-        ("https://a.example/", "gpt-6-2-astra"),
-        ("https://b.example/", "gpt-6-2-sol"),
+        ("https://a.example/", "gpt-5-4-mini"),
+        ("https://b.example/", "gpt-5-mini"),
     ]
 
 
@@ -69,7 +69,7 @@ def test_mocked_client_returns_canned_reply_without_network(
 ):
     client = clients_mod.build_chat_client(
         CLASSIC_ENDPOINT,
-        "gpt-6-2-astra",
+        "gpt-5-4-mini",
         client_factory=lambda endpoint, model, **kw: mock_chat_client,
     )
     reply = client.complete("hello")
@@ -85,11 +85,11 @@ def test_default_factory_builds_openai_client_on_classic_endpoint(clients_mod):
     """
     from agent_framework_openai import OpenAIChatClient
 
-    client = clients_mod.build_chat_client(CLASSIC_ENDPOINT, "gpt-6-2-astra")
+    client = clients_mod.build_chat_client(CLASSIC_ENDPOINT, "gpt-5-4-mini")
     assert isinstance(client, OpenAIChatClient)
     assert client.azure_endpoint == CLASSIC_ENDPOINT
     assert client.api_version == PROVEN_API_VERSION
-    assert client.model == "gpt-6-2-astra"
+    assert client.model == "gpt-5-4-mini"
 
 
 def test_default_factory_api_version_must_be_passed_explicitly(clients_mod):

@@ -8,8 +8,8 @@ call — see crew/clients.py CountingChatClient — priced per deployment,
 and accumulated in one process-wide tracker.
 
 Prices are $ per 1M tokens, as billed on this subscription:
-  Astra: $8 input, $0.40 cached input, $40 output
-  Sol:   $2 input, $0.10 cached input, $10 output
+  gpt-5.4-mini (Data Zone Standard): $0.83 input, $0.09 cached input,
+  $4.95 output
 Cached tokens are a subset of input tokens, so they are priced at the
 cached rate and the rest of the input at the full rate. Reasoning
 tokens are a subset of output tokens — they are NOT added twice.
@@ -40,18 +40,17 @@ from .credit import stop_threshold_usd
 log = logging.getLogger(__name__)
 
 # $ per 1M tokens. Keyed by deployment name; the Responses API reports
-# the model name with dots (gpt-6.2-astra), so both spellings map here.
+# the model name with dots (gpt-5.4-mini), so both spellings map here.
 _PRICES_USD_PER_MILLION: dict[str, dict[str, float]] = {
-    "gpt-6-2-astra": {"input": 8.0, "cached_input": 0.40, "output": 40.0},
-    "gpt-6-2-sol": {"input": 2.0, "cached_input": 0.10, "output": 10.0},
+    "gpt-5-4-mini": {"input": 0.83, "cached_input": 0.09, "output": 4.95},
 }
 _ALIASES = {
-    "gpt-6.2-astra": "gpt-6-2-astra",
-    "gpt-6.2-sol": "gpt-6-2-sol",
+    "gpt-5.4-mini": "gpt-5-4-mini",
 }
-# Unknown deployment: price at the most expensive rate (Astra) and say
-# so, so a new model can only stop the crew early, never overshoot.
-_FALLBACK_PRICES = _PRICES_USD_PER_MILLION["gpt-6-2-astra"]
+# Unknown deployment: price at the old Astra rates ($8 in / $0.40
+# cached / $40 out) and say so, so a new model can only stop the crew
+# early, never overshoot.
+_FALLBACK_PRICES = {"input": 8.0, "cached_input": 0.40, "output": 40.0}
 
 #: Ledger event carrying the cumulative total; restore reads the last one.
 SPEND_EVENT = "spend"
@@ -64,7 +63,7 @@ class SpendLimitExceeded(RuntimeError):
 
 
 def _prices_for(model: str | None) -> dict[str, float]:
-    """Price table for a deployment name; Astra rates for anything unknown."""
+    """Price table for a deployment name; old Astra rates for anything unknown."""
     key = _ALIASES.get(model or "", model or "")
     prices = _PRICES_USD_PER_MILLION.get(key)
     if prices is None:

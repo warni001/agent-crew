@@ -42,7 +42,8 @@ prints the deploy credential for manual copy).
 Four things need you before (or right after) the deploy:
 
 1. **Quota.** Check TPM quota in the portal (Foundry → Quotas) for
-   `gpt-6.2-astra` and `gpt-6.2-sol` in westus3 and for
+   `gpt-5.4-mini` in westus3 (Data Zone Standard, 200K TPM — the only
+   GPT model with quota on this subscription) and for
    `claude-sonnet-5-5` in eastus2. Quota is the likeliest deploy
    blocker: a model deployment fails when quota is zero. `deploy.sh`
    runs a warn-only quota pre-check; if a model has no quota, request
@@ -138,15 +139,13 @@ is the crew's first task.
 
 | Model | Version | Region | Deployment | Verified against |
 |---|---|---|---|---|
-| `gpt-6.2-astra` | `2026-11-17` | westus3 | Global Standard | Foundry models catalog (Microsoft Learn) |
-| `gpt-6.2-sol` | `2026-11-17` | westus3 | Global Standard | Foundry models catalog (Microsoft Learn) |
+| `gpt-5.4-mini` | `2026-03-17` | westus3 | Data Zone Standard | `az cognitiveservices model list`, westus3 (Nov 27) |
 | `claude-sonnet-5-5` | `1` (param) | eastus2 | Global Standard | Claude on Foundry starter kit (Microsoft Learn sample) + Anthropic Foundry guide |
 
-Two Foundry accounts because the families do not share a region:
-GPT-6.2 is available in westus3 but not eastus2 (Foundry region
-table); eastus2 hosts all three Claude families. Capacities are 100
-(thousands of TPM) per deployment — quota is 1000K TPM Global
-Standard in westus3 for both GPT-6.2 models, verified Nov 19.
+Two Foundry accounts: the GPT account lives in westus3, where
+gpt-5.4-mini's 200K TPM Data Zone quota was verified (Nov 27);
+eastus2 hosts all three Claude families. Capacity is 200
+(thousands of TPM) for the one GPT deployment.
 
 Open questions, flagged in the template rather than guessed:
 
@@ -182,8 +181,9 @@ Checked before this push (Nov 19):
 Still needs a live deploy to confirm (no `az` on the build machine,
 and nothing here has touched Azure yet):
 
-- TPM quota for claude-sonnet-5-5 in eastus2 (GPT-6.2 quota verified:
-  1000K TPM Global Standard in westus3).
+- TPM quota for claude-sonnet-5-5 in eastus2 (gpt-5.4-mini quota verified:
+  200K TPM Data Zone Standard in westus3, Nov 27; gpt-6.2 is 0 TPM on
+  this sub).
 - Claude subscription eligibility (Enterprise / MCA-E).
 - The Claude version/hosting question above.
 - The Logic App end-to-end: budget → Action Group → callback URL →
@@ -225,10 +225,10 @@ The crew runs as one always-on replica in Container App
 `ca-agent-crew` (see "Compute" above). On start it loads config
 from the environment only, reads its token from Key Vault
 `kv-agentcrew-vaxvu3c2`, and picks up its next task from GitHub
-issues in this repo. Roles: Planner (GPT-6.2 Astra) plans,
-Builder (GPT-6.2 Sol) implements and opens the PR, Reviewer
-(GPT-6.2 Astra) reviews against Ponytail and signs off, Merger
-(GPT-6.2 Sol) merges once tests, CI, and Reviewer sign-off are
+issues in this repo. Roles: Planner (GPT-5.4 Mini) plans,
+Builder (GPT-5.4 Mini) implements and opens the PR, Reviewer
+(GPT-5.4 Mini) reviews against Ponytail and signs off, Merger
+(GPT-5.4 Mini) merges once tests, CI, and Reviewer sign-off are
 green. Full operating instructions: `docs/crew-instructions.md`;
 coding rules: `ponytail.md`, pointed at by `AGENTS.md`.
 
