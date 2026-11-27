@@ -17,7 +17,6 @@ from unittest import mock
 
 import pytest
 from agent_framework import AgentResponse, Content, Message
-from agent_framework.orchestrations import SequentialBuilder
 
 from conftest import require_crew
 
@@ -131,19 +130,23 @@ def test_run_shell_refusal_is_logged(caplog):
 
 def test_run_task_returns_and_logs_every_agent(monkeypatch, caplog):
     """run_task returns all four agents' responses in pipeline order
-    (intermediates + final) and logs each one's text at INFO."""
+    and logs each one's text at INFO."""
     orch_mod = require_crew("orchestration")
     config_mod = require_crew("config")
     roles = {
         name: FakeAgent([_resp(name, f"{name} did its part")], name=name)
-        for name in ("planner", "builder", "reviewer", "merger")
+        for name in ("planner", "reviewer", "merger")
     }
-    monkeypatch.setattr(orch_mod, "build_roles", lambda config: roles)
+    # The builder's reply must carry a tool call: a text-only builder
+    # turn trips the action gate and is retried (see test_builder_gate).
+    roles["builder"] = FakeAgent(
+        [_resp_with_tool("builder", "builder did its part", "run_shell", "ok")],
+        name="builder",
+    )
     monkeypatch.setattr(orch_mod, "spent_usd", lambda: 0.0)
     config = config_mod.CrewConfig(foundry_project_endpoint=PROJECT_ENDPOINT)
-    workflow = orch_mod.build_workflow(config)
     with caplog.at_level(logging.INFO, logger="crew.orchestration"):
-        outputs = asyncio.run(orch_mod.run_task(workflow, "do the thing", config))
+        outputs = asyncio.run(orch_mod.run_task(roles, "do the thing", config))
     assert [str(o) for o in outputs] == [
         "planner did its part",
         "builder did its part",
@@ -153,22 +156,6 @@ def test_run_task_returns_and_logs_every_agent(monkeypatch, caplog):
     for name in ("planner", "builder", "reviewer", "merger"):
         assert f"{name} response:" in caplog.text
         assert f"{name} did its part" in caplog.text
-
-
-def test_intermediate_outputs_reach_the_next_agent(monkeypatch):
-    """Sanity: intermediate_output_from="all_other" does not change
-    what the next agent sees — it only adds events to the result."""
-    worker = FakeAgent([_resp("worker", "plan is ready")], name="worker")
-    receiver = FakeAgent([_resp("receiver", "got it")], name="receiver")
-    workflow = SequentialBuilder(
-        participants=[worker, receiver],
-        chain_only_agent_responses=True,
-        output_from=[receiver],
-        intermediate_output_from="all_other",
-    ).build()
-    result = asyncio.run(workflow.run("do the thing"))
-    assert [str(o) for o in result.get_intermediate_outputs()] == ["plan is ready"]
-    assert [str(o) for o in result.get_outputs()] == ["got it"]
 
 
 # --- 3. the run summary: header + narrative ---

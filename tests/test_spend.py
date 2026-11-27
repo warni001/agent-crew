@@ -191,19 +191,32 @@ def test_run_task_refuses_when_tracked_spend_over_line(spend_mod):
     import asyncio
     from unittest import mock
 
+    from agent_framework import AgentResponse, Content, Message
+
     orch_mod = require_crew("orchestration")
     config_mod = require_crew("config")
     config = config_mod.CrewConfig(
         foundry_project_endpoint="https://foundry-gpt-vaxvu3c2.services.ai.azure.com/api/projects/crew"
     )
-    workflow = mock.AsyncMock()
-    result = mock.MagicMock()
-    result.get_intermediate_outputs.return_value = []
-    result.get_outputs.return_value = ["done"]
-    workflow.run.return_value = result
+
+    def _resp(text):
+        return AgentResponse(
+            messages=[Message(role="assistant", contents=[Content.from_text(text)])],
+            response_id="resp-done",
+        )
+
+    roles = {}
+    for name in ("planner", "builder", "reviewer", "merger"):
+        # Plain MagicMock agent: only .run is async. A bare AsyncMock
+        # would make .create_session async too, leaving an unawaited
+        # coroutine behind.
+        agent = mock.MagicMock()
+        agent.run = mock.AsyncMock(return_value=_resp("done"))
+        roles[name] = agent
     # Under the line: runs.
-    assert asyncio.run(orch_mod.run_task(workflow, "do it", config)) == ["done"]
+    outputs = asyncio.run(orch_mod.run_task(roles, "do it", config))
+    assert [str(o) for o in outputs] == ["done"] * 4
     # Over the line: refuses before any model call.
     spend_mod.reset_spend(starting_usd=190.0)
     with pytest.raises(RuntimeError, match="crew stopped before starting"):
-        asyncio.run(orch_mod.run_task(workflow, "do it", config))
+        asyncio.run(orch_mod.run_task(roles, "do it", config))
