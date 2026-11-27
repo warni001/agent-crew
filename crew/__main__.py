@@ -33,7 +33,7 @@ from .feedback import (
     report_stalled,
     tag_task_stalled,
 )
-from .blob_ledger import build_ledger
+from .blob_ledger import BlobLedger, build_ledger
 from .ledger import Ledger
 from .orchestration import builder_tool_calls, format_run_summary, run_task
 from .roles import build_roles
@@ -150,14 +150,17 @@ def next_task(config: CrewConfig, ledger: Ledger) -> str | None:
     return picked["task"] if picked else None
 
 
-def _record(ledger: Ledger, event: str, **fields: object) -> None:
+def _record(ledger: Ledger, event: str, *, wait: float = 0, **fields: object) -> None:
     """Best-effort ledger write: a ledger failure warns, never kills a run.
 
     The ledger is an audit trail, not the work itself. (A PermissionError
     here once crash-looped the whole container before any model call.)
     """
     try:
-        ledger.record(event, **fields)
+        if isinstance(ledger, BlobLedger):
+            ledger.enqueue(event, fields, wait=wait)
+        else:
+            ledger.record(event, **fields)
     except Exception as exc:  # noqa: BLE001 - ledger must not kill a run
         logging.getLogger("crew").warning("ledger %s failed: %s", event, exc)
 
@@ -172,6 +175,8 @@ def _record_spend(ledger: Ledger) -> None:
     _record(
         ledger,
         "spend",
+        # Outside the task timer: allow a short drain, not an Azure retry.
+        wait=0.25,
         usd=round(spent_usd(), 4),
         by_model=TRACKER.snapshot()["by_model"],
     )

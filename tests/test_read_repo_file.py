@@ -23,7 +23,7 @@ def tools_mod():
 
 
 def _fake_run(monkeypatch, outputs, returncode=0, stderr=""):
-    """Mock subprocess.run: one stdout per call, in order.
+    """Mock subprocess.Popen: one stdout per call, in order.
 
     `outputs` is a list of stdouts, one per gh call: the metadata
     check first, then the raw fetch. A single string is one call.
@@ -37,11 +37,10 @@ def _fake_run(monkeypatch, outputs, returncode=0, stderr=""):
         calls.append(list(cmd))
         result = mock.Mock()
         result.returncode = returncode
-        result.stdout = outputs.pop(0) if outputs else ""
-        result.stderr = stderr
+        result.communicate.return_value = (outputs.pop(0) if outputs else "", stderr)
         return result
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     return calls
 
 

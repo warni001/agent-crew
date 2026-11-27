@@ -135,6 +135,7 @@ def clean_env(monkeypatch):
     """
     for var in ("KEY_VAULT_URL", "FOUNDRY_GPT_ENDPOINT", "GITHUB_TOKEN"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("CREW_LEDGER_BLOB_URL", raising=False)
     monkeypatch.setenv("KEY_VAULT_URL", "https://kv-agentcrew-vaxvu3c2.vault.azure.net/")
     monkeypatch.setenv("FOUNDRY_GPT_ENDPOINT", "https://foundry-gpt-vaxvu3c2.cognitiveservices.azure.com/")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_test-token-placeholder")
@@ -143,18 +144,17 @@ def clean_env(monkeypatch):
 
 @pytest.fixture
 def mock_gh(monkeypatch):
-    """Mock ``subprocess.run`` as the ``gh`` CLI: records calls, no network."""
+    """Mock ``subprocess.Popen`` as the ``gh`` CLI: no network."""
     calls: list[list[str]] = []
 
     def fake_run(cmd, *args, **kwargs):
         calls.append(list(cmd))
         result = mock.Mock()
         result.returncode = 0
-        result.stdout = "{}"
-        result.stderr = ""
+        result.communicate.return_value = ("{}", "")
         return result
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
     return calls
 
 

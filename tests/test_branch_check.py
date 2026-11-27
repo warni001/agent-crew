@@ -25,11 +25,10 @@ def _fake_run(monkeypatch, calls, stdout=""):
         calls.append(list(cmd))
         result = mock.Mock()
         result.returncode = 0
-        result.stdout = stdout
-        result.stderr = ""
+        result.communicate.return_value = (stdout, "")
         return result
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
 
 def test_planner_names_existing_branch_or_states_none():
@@ -93,7 +92,7 @@ def test_builder_must_call_a_tool_before_refusing():
 
 
 def _scripted_run(monkeypatch, calls, script):
-    """Fake subprocess.run: script maps an exact command list to
+    """Fake subprocess.Popen: script maps an exact command list to
     (returncode, stdout); anything unlisted succeeds with no output."""
 
     def fake_run(cmd, *args, **kwargs):
@@ -101,11 +100,10 @@ def _scripted_run(monkeypatch, calls, script):
         rc, out = script.get(tuple(cmd), (0, ""))
         result = mock.Mock()
         result.returncode = rc
-        result.stdout = out
-        result.stderr = ""
+        result.communicate.return_value = (out, "")
         return result
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
 
 def test_task_branch_name_from_issue_and_text():

@@ -17,16 +17,15 @@ from conftest import require_crew
 
 
 def _fake_run(monkeypatch, calls, outputs):
-    """Mock subprocess.run: pop one stdout per call, in order."""
+    """Mock subprocess.Popen: pop one stdout per call, in order."""
     def fake_run(cmd, *args, **kwargs):
         calls.append(list(cmd))
         result = mock.Mock()
         result.returncode = 0
-        result.stdout = outputs.pop(0)
-        result.stderr = ""
+        result.communicate.return_value = (outputs.pop(0), "")
         return result
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
 
 def test_read_pr_returns_title_body_and_diff(monkeypatch):

@@ -360,12 +360,66 @@ def test_task_deadline_bounds_branch_subprocess(task_runner, monkeypatch, spend_
     monkeypatch.setattr(main, "build_roles", build_roles)
     monkeypatch.setattr(spend_mod, "monotonic", lambda: 100.0)
 
-    def timeout(cmd, *, timeout, **kwargs):
+    def timeout(*, timeout):
         assert timeout == pytest.approx(60)
-        raise tools.subprocess.TimeoutExpired(cmd, timeout)
+        raise tools.subprocess.TimeoutExpired("git", timeout)
 
-    monkeypatch.setattr(tools.subprocess, "run", timeout)
+    proc = Mock(pid=1234)
+    proc.communicate.side_effect = timeout
+    popen = Mock(return_value=proc)
+    killpg = Mock()
+    monkeypatch.setattr(tools.subprocess, "Popen", popen)
+    monkeypatch.setattr(tools.os, "killpg", killpg)
     config = main.CrewConfig(ledger_path=str(ledger.path), task_time_limit_minutes=1)
     assert main.run_one_task(config, ledger, "branch timeout") == 1
     assert ledger.entries()[-2]["reason"] == "task_time_limit"
     build_roles.assert_not_called()
+    assert popen.call_args.kwargs["start_new_session"] is True
+    killpg.assert_called_once_with(1234, tools.signal.SIGKILL)
+    proc.stdout.close.assert_called_once()
+    proc.stderr.close.assert_called_once()
+    proc.wait.assert_called_once_with(timeout=0.25)
+
+
+def test_command_timeout_kills_descendant_after_leader_exits(tmp_path):
+    import os
+    import sys
+    import time
+
+    if sys.platform != "linux":
+        pytest.skip("uses /proc to distinguish a killed orphan from a live process")
+    tools = require_crew("tools")
+    pids = tmp_path / "pids"
+    # The descendant keeps both pipes open after the leader exits. Limit
+    # its lifetime even if _run regresses, and clean up on assertion failure.
+    script = (
+        "import os, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])\n"
+        "Path(sys.argv[1]).write_text(f'{os.getpid()} {child.pid}')\n"
+    )
+    start = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="command timed out"):
+            tools._run([sys.executable, "-c", script, str(pids)], timeout=0.75)
+        assert time.monotonic() - start < 2
+        leader, child = (int(pid) for pid in pids.read_text().split())
+        assert not os.path.exists(f"/proc/{leader}")  # direct child reaped
+
+        def child_running():
+            from pathlib import Path
+            try:
+                return Path(f"/proc/{child}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+            except FileNotFoundError:
+                return False
+
+        until = time.monotonic() + 1
+        while child_running() and time.monotonic() < until:
+            time.sleep(0.01)
+        assert not child_running()
+    finally:
+        if pids.exists():
+            try:
+                os.killpg(int(pids.read_text().split()[0]), tools.signal.SIGKILL)
+            except ProcessLookupError:
+                pass
