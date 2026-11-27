@@ -314,6 +314,61 @@ def test_watch_late_heartbeat_recovers(rw):
     assert runner.rollback_commands() == []
 
 
+def test_ledger_entries_missing_blob_returns_empty(rw):
+    # No ledger blob yet (fresh deploy, idle crew, nothing recorded):
+    # zero entries, not an error.
+    runner = FakeRunner()
+    real_call = runner.__call__
+
+    def missing_blob(cmd):
+        if "blob download" in " ".join(cmd):
+            raise RuntimeError(
+                "The specified blob does not exist. ErrorCode:BlobNotFound"
+            )
+        return real_call(cmd)
+
+    assert rw.ledger_entries(
+        missing_blob, "https://example.blob.core.windows.net/ledger/crew-ledger.jsonl"
+    ) == []
+
+
+def test_ledger_entries_other_failures_still_raise(rw):
+    # A download failure that is not BlobNotFound (e.g. no Blob Data
+    # Reader) stays an error, so the watch still fails loudly.
+    runner = FakeRunner(fail_on=("blob download",))
+    with pytest.raises(RuntimeError):
+        rw.ledger_entries(
+            runner, "https://example.blob.core.windows.net/ledger/crew-ledger.jsonl"
+        )
+
+
+def test_watch_missing_ledger_blob_is_healthy_when_idle(rw):
+    # Same missing blob, at the watch level: running replica, no
+    # heartbeat, nothing queued (default task covered by a Done issue)
+    # — healthy, no rollback. This is the Nov 27 case: the first
+    # deploy of a fresh crew failed the watch (exit 2) only because
+    # the blob did not exist yet.
+    clock = FakeClock(_ts(6, 35, 0))
+    done = json.dumps([{"title": "[crew] Done: " + rw.DEFAULT_TASK}])
+    runner = FakeRunner(done_issues_json=done, task_issues_json="[]")
+    real_call = runner.__call__
+
+    def missing_blob(cmd):
+        if "blob download" in " ".join(cmd):
+            raise RuntimeError(
+                "The specified blob does not exist. ErrorCode:BlobNotFound"
+            )
+        return real_call(cmd)
+
+    assert rw.watch(
+        "rg-agent-crew", "ca-agent-crew",
+        "ca-agent-crew--deploy-abcdef0", "ca-agent-crew--deploy-1234567",
+        watch_seconds=60, poll_seconds=30,
+        runner=missing_blob, sleep=clock.sleep, now=clock.now,
+    ) == rw.EXIT_HEALTHY
+    assert runner.rollback_commands() == []
+
+
 def test_watch_unreadable_ledger_fails_loud_without_rollback(rw):
     # The deploy SP has no Storage Blob Data Reader yet: the heartbeat
     # is unverifiable. Rolling back on that signal would revert healthy
@@ -376,6 +431,12 @@ def test_deploy_workflow_records_last_good_and_watches():
     assert workflow.index("Verify the new revision is ready") < workflow.index(
         "rollback_watch.py"
     )
+    # A re-run must mint a new revision, not collide with the first
+    # attempt's suffix: the suffix carries the run attempt number
+    # (Nov 27: re-runs failed with 'revision with suffix
+    # deploy-<sha> already exists').
+    assert 'SUFFIX="deploy-$SHORT_SHA-a$GITHUB_RUN_ATTEMPT"' in workflow
+    assert '--revision-suffix deploy-"$SHORT_SHA"' not in workflow
 
 
 def test_bicep_grants_deploy_sp_ledger_read():

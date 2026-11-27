@@ -235,22 +235,34 @@ def ledger_blob_url(runner, resource_group: str, app: str) -> str:
 
 
 def ledger_entries(runner, blob_url: str) -> list[dict]:
-    """All entries in the ledger blob, via `az storage blob download`."""
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "crew-ledger.jsonl"
-        runner(
-            [
-                "az", "storage", "blob", "download",
-                "--blob-url", blob_url, "--auth-mode", "login",
-                "--file", str(path), "--overwrite", "-o", "none",
-            ]
-        )
-        entries: list[dict] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                entries.append(json.loads(line))
-    return entries
+    """All entries in the ledger blob, via `az storage blob download`.
+
+    A blob that does not exist yet means no entries, not an unreadable
+    ledger: the crew only creates the blob when it records its first
+    event, so a fresh deploy with an idle crew has no blob. Any other
+    download failure (e.g. no Storage Blob Data Reader) is still an
+    error, and the watch fails loudly without rolling back.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "crew-ledger.jsonl"
+            runner(
+                [
+                    "az", "storage", "blob", "download",
+                    "--blob-url", blob_url, "--auth-mode", "login",
+                    "--file", str(path), "--overwrite", "-o", "none",
+                ]
+            )
+            entries: list[dict] = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    entries.append(json.loads(line))
+            return entries
+    except RuntimeError as exc:
+        if "BlobNotFound" in str(exc):
+            return []
+        raise
 
 
 def rollback(runner, resource_group: str, app: str, previous: str, new: str) -> None:
