@@ -42,9 +42,9 @@ prints the deploy credential for manual copy).
 Four things need you before (or right after) the deploy:
 
 1. **Quota.** Check TPM quota in the portal (Foundry → Quotas) for
-   `gpt-5.4-mini` in westus3 (Data Zone Standard, 200K TPM — the only
-   GPT model with quota on this subscription) and for
-   `claude-sonnet-5-5` in eastus2. Quota is the likeliest deploy
+   `gpt-5.4-mini` in westus3 (Data Zone Standard, 200K TPM),
+   `gpt-6.2-sol` in westus3 (Global Standard, 1M TPM pool, verified
+   live Nov 27), and for `claude-sonnet-5-5` in eastus2. Quota is the likeliest deploy
    blocker: a model deployment fails when quota is zero. `deploy.sh`
    runs a warn-only quota pre-check; if a model has no quota, request
    it in the portal, or re-run with `deployModels=false` and add the
@@ -140,12 +140,15 @@ is the crew's first task.
 | Model | Version | Region | Deployment | Verified against |
 |---|---|---|---|---|
 | `gpt-5.4-mini` | `2026-03-17` | westus3 | Data Zone Standard | `az cognitiveservices model list`, westus3 (Nov 27) |
+| `gpt-6.2-sol` | `2026-11-17` | westus3 | Global Standard | Foundry portal Quotas page + trial deployment provisioned and answered (Nov 27) |
 | `claude-sonnet-5-5` | `1` (param) | eastus2 | Global Standard | Claude on Foundry starter kit (Microsoft Learn sample) + Anthropic Foundry guide |
 
 Two Foundry accounts: the GPT account lives in westus3, where
-gpt-5.4-mini's 200K TPM Data Zone quota was verified (Nov 27);
+gpt-5.4-mini's 200K TPM Data Zone quota and gpt-6.2-sol's 1M TPM
+Global Standard pool were verified (Nov 27);
 eastus2 hosts all three Claude families. Capacity is 200
-(thousands of TPM) for the one GPT deployment.
+(thousands of TPM) for the mini deployment and 100 for the Sol
+deployment.
 
 Open questions, flagged in the template rather than guessed:
 
@@ -182,8 +185,8 @@ Still needs a live deploy to confirm (no `az` on the build machine,
 and nothing here has touched Azure yet):
 
 - TPM quota for claude-sonnet-5-5 in eastus2 (gpt-5.4-mini quota verified:
-  200K TPM Data Zone Standard in westus3, Nov 27; gpt-6.2 is 0 TPM on
-  this sub).
+  200K TPM Data Zone Standard in westus3, Nov 27; gpt-6.2-sol 1M TPM pool
+  verified live Nov 27, trial deployment provisioned and answered).
 - Claude subscription eligibility (Enterprise / MCA-E).
 - The Claude version/hosting question above.
 - The Logic App end-to-end: budget → Action Group → callback URL →

@@ -10,6 +10,7 @@ param location = 'westus3'
 param claudeLocation = 'eastus2'
 param deployModels = true
 param gptMiniCapacity = 200
+param gptSolCapacity = 100
 param claudeCapacity = 10
 param claudeModelVersion = '1'
 

@@ -89,6 +89,35 @@ def test_versioned_model_name_maps(spend_mod):
     assert spend_mod.price_usd("gpt-5.4-mini-2026-03-17", MINI_IN) == pytest.approx(0.83)
 
 
+SOL_IN = {"input_token_count": 1_000_000}
+SOL_OUT = {"output_token_count": 1_000_000}
+
+
+def test_sol_input_price(spend_mod):
+    assert spend_mod.price_usd("gpt-6-2-sol", SOL_IN) == pytest.approx(2.0)
+
+
+def test_sol_output_price(spend_mod):
+    assert spend_mod.price_usd("gpt-6-2-sol", SOL_OUT) == pytest.approx(10.0)
+
+
+def test_sol_cached_input_price(spend_mod):
+    usage = {"input_token_count": 1_000_000, "cache_read_input_token_count": 1_000_000}
+    assert spend_mod.price_usd("gpt-6-2-sol", usage) == pytest.approx(0.10)
+
+
+def test_sol_dotted_and_versioned_names_map(spend_mod):
+    # The API reports "gpt-6.2-sol" (and the versioned deployment name);
+    # both price at Sol rates, not the Astra fallback.
+    assert spend_mod.price_usd("gpt-6.2-sol", SOL_IN) == pytest.approx(2.0)
+    assert spend_mod.price_usd("gpt-6.2-sol-2026-11-17", SOL_IN) == pytest.approx(2.0)
+
+
+def test_sol_test_deployment_name_maps(spend_mod):
+    # The Nov 27 trial deployment gpt-6-2-sol-test prices at Sol rates.
+    assert spend_mod.price_usd("gpt-6-2-sol-test", SOL_IN) == pytest.approx(2.0)
+
+
 def test_unknown_model_priced_at_fallback_rates(spend_mod):
     # A new deployment can only stop the crew early, never overshoot:
     # unknown models price at the old Astra rates ($8 in / $40 out).

@@ -9,12 +9,12 @@ and `ponytail.md` alongside this file.
 
 | Role | Model | Job |
 |---|---|---|
-| Planner | GPT-5.4 Mini | Breaks a task into small, ordered steps. Writes the plan into the task issue. |
-| Builder | GPT-5.4 Mini | Implements one step at a time, smallest change that works, with a test. Opens the PR. |
-| Reviewer | GPT-5.4 Mini | Reviews the PR against Ponytail and the plan. Sign-off is the merge gate — see below. |
-| Merger | GPT-5.4 Mini | Merges only after Reviewer sign-off, only when tests and CI are green. |
+| Planner | GPT-6.2 Sol | Breaks a task into small, ordered steps. Writes the plan into the task issue. |
+| Builder | GPT-6.2 Sol | Implements one step at a time, smallest change that works, with a test. Opens the PR. |
+| Reviewer | GPT-6.2 Sol | Reviews the PR against Ponytail and the plan. Sign-off is the merge gate — see below. |
+| Merger | GPT-6.2 Sol | Merges only after Reviewer sign-off, only when tests and CI are green. |
 
-One model for all roles (gpt-5.4-mini), no human review. Roles do not blur:
+One model for all roles (gpt-6-2-sol), no human review. Roles do not blur:
 the Builder never approves its own PR, the Merger never merges
 without sign-off.
 
@@ -228,7 +228,7 @@ in the same PR.
   client_factory=None)` — factory injectable so tests stay offline.
   The real client is `agent_framework_openai.OpenAIChatClient`,
   keyword-only args `model=...` (deployment name, e.g.
-  `gpt-5-4-mini`), `azure_endpoint=...` (the classic Azure OpenAI
+  `gpt-6-2-sol`), `azure_endpoint=...` (the classic Azure OpenAI
   endpoint, `https://foundry-gpt-vaxvu3c2.openai.azure.com`),
   `credential=...`, `api_version="preview"`.
   Chat calls go to the classic endpoint, NOT the Foundry project
