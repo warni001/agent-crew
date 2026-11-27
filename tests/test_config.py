@@ -105,6 +105,23 @@ def test_from_env_max_rounds_reads_env(config_mod, clean_env, monkeypatch):
     assert cfg.max_rounds == 5
 
 
+def test_from_env_model_defaults_are_sol(config_mod, clean_env, monkeypatch):
+    for var in (
+        "CREW_MODEL_PLANNER",
+        "CREW_MODEL_REVIEWER",
+        "CREW_MODEL_BUILDER",
+        "CREW_MODEL_MERGER",
+        "CREW_MODEL_MANAGER",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    cfg = config_mod.CrewConfig.from_env(env=dict(os.environ))
+    assert cfg.planner_model == "gpt-6-2-sol"
+    assert cfg.reviewer_model == "gpt-6-2-sol"
+    assert cfg.builder_model == "gpt-6-2-sol"
+    assert cfg.merger_model == "gpt-6-2-sol"
+    assert cfg.manager_model == "gpt-6-2-sol"
+
+
 def test_no_secret_literals_in_crew_config_source(config_mod):
     """The config module itself must not contain a literal token/secret."""
     import inspect

@@ -9,9 +9,12 @@
 //   Two Azure AI Foundry accounts (AIServices, S0), one per model family,
 //     because the families do not share a region:
 //     - GPT account in the resource-group region: gpt-5.4-mini, Data
-//       Zone Standard, version 2026-03-17. The only GPT model with TPM
-//       quota on this subscription (200K TPM Data Zone, verified live
-//       Nov 27) — gpt-6.2 has 0 TPM everywhere on this sub.
+//       Zone Standard, version 2026-03-17 (200K TPM Data Zone, verified
+//       live Nov 27), plus gpt-6.2-sol, Global Standard, version
+//       2026-11-17 (1M TPM pool, verified live Nov 27 — the trial
+//       deployment provisioned and answered the same day; the 0 TPM
+//       reading from Nov 26-27 is stale). All four crew roles run on
+//       Sol; mini stays deployed as the fallback and for mini-chat.
 //     - Claude account in eastus2: claude-sonnet-5-5, Global Standard.
 //       Verified against the Claude on Foundry starter kit: eastus2 hosts
 //       all three Claude families.
@@ -55,6 +58,9 @@ param deployModels bool = true
 
 @description('Data Zone Standard capacity (thousands of TPM) for the gpt-5.4-mini deployment.')
 param gptMiniCapacity int = 10
+
+@description('Global Standard capacity (thousands of TPM) for the gpt-6.2-sol deployment. 100 fits the 1M TPM pool verified live Nov 27.')
+param gptSolCapacity int = 10
 
 @description('Global Standard capacity (thousands of TPM) for the Sonnet deployment.')
 param claudeCapacity int = 10
@@ -161,8 +167,8 @@ resource gptProject 'Microsoft.CognitiveServices/accounts/projects@2025-10-01-pr
 
 // Model name and version verified against the live model list
 // (az cognitiveservices model list, westus3, Nov 27): gpt-5.4-mini,
-// version 2026-03-17, DataZoneStandard in the SKU list. One
-// deployment: all four roles run on it.
+// version 2026-03-17, DataZoneStandard in the SKU list. Mini stays
+// deployed as the fallback (and for mini-chat); the crew runs on Sol.
 resource miniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-10-01-preview' = if (deployModels) {
   parent: gptAccount
   name: 'gpt-5-4-mini'
@@ -175,6 +181,31 @@ resource miniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-1
       format: 'OpenAI'
       name: 'gpt-5.4-mini'
       version: '2026-03-17'
+    }
+    versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+  dependsOn: [
+    gptProject
+  ]
+}
+
+// gpt-6.2-sol, Global Standard, version 2026-11-17. Verified live
+// Nov 27: the Foundry portal shows a 1M TPM shared pool on this
+// subscription, and a trial deployment (gpt-6-2-sol-test, capacity 10)
+// provisioned and answered the same day. All four crew roles run on
+// this deployment (see crew/config.py defaults).
+resource solDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-10-01-preview' = if (deployModels) {
+  parent: gptAccount
+  name: 'gpt-6-2-sol'
+  sku: {
+    name: 'GlobalStandard'
+    capacity: gptSolCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'gpt-6.2-sol'
+      version: '2026-11-17'
     }
     versionUpgradeOption: 'OnceCurrentVersionExpired'
   }

@@ -10,6 +10,9 @@ and accumulated in one process-wide tracker.
 Prices are $ per 1M tokens, as billed on this subscription:
   gpt-5.4-mini (Data Zone Standard): $0.83 input, $0.09 cached input,
   $4.95 output
+  gpt-6.2-sol (Global Standard): $2.00 input, $0.10 cached input,
+  $10.00 output (OpenAI pricing page, Nov 17, 2026; verified live
+  Nov 27 — Sol deployment provisioned on this sub, 1M TPM pool)
 Cached tokens are a subset of input tokens, so they are priced at the
 cached rate and the rest of the input at the full rate. Reasoning
 tokens are a subset of output tokens — they are NOT added twice.
@@ -40,14 +43,22 @@ from .credit import stop_threshold_usd
 log = logging.getLogger(__name__)
 
 # $ per 1M tokens. Keyed by deployment name; the Responses API reports
-# the model name with dots (gpt-5.4-mini), so both spellings map here.
+# the model name with dots (gpt-5.4-mini, gpt-6.2-sol), so both spellings
+# map here.
 _PRICES_USD_PER_MILLION: dict[str, dict[str, float]] = {
     "gpt-5-4-mini": {"input": 0.83, "cached_input": 0.09, "output": 4.95},
+    "gpt-6-2-sol": {"input": 2.0, "cached_input": 0.10, "output": 10.0},
 }
 _ALIASES = {
     "gpt-5.4-mini": "gpt-5-4-mini",
     # The Responses API reports the versioned deployment name.
     "gpt-5.4-mini-2026-03-17": "gpt-5-4-mini",
+    "gpt-6.2-sol": "gpt-6-2-sol",
+    "gpt-6.2-sol-2026-11-17": "gpt-6-2-sol",
+    # Trial deployment name (Nov 27: gpt-6-2-sol-test provisioned and
+    # answered on this sub, then deleted; the alias prices any future
+    # deployment under that name at Sol rates).
+    "gpt-6-2-sol-test": "gpt-6-2-sol",
 }
 # Unknown deployment: price at the old Astra rates ($8 in / $0.40
 # cached / $40 out) and say so, so a new model can only stop the crew

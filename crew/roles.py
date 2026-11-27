@@ -1,6 +1,6 @@
-"""Role agents. All four roles run on gpt-5.4-mini — the only GPT model
-with TPM quota on this subscription (200K TPM, Data Zone Standard).
-The deployment name (gpt-5-4-mini) comes from config, overridable
+"""Role agents. All four roles run on gpt-6-2-sol — the crew's model
+since the Nov 27 quota pools landed (1M TPM, Global Standard).
+The deployment name (gpt-6-2-sol) comes from config, overridable
 by env.
 
 All API use below was verified against the installed packages
