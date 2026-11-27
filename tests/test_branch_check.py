@@ -73,6 +73,24 @@ def test_builder_checks_existing_branch_before_creating_one():
     assert "never pushed creates no new head" in text
 
 
+def test_builder_gets_on_a_branch_before_writing_code():
+    """Regression (Nov 27, 2026): the #75 run stalled because the
+    builder refused to create a branch — 'I have not yet been asked
+    to create or update one' — even though the planner had said no
+    existing branch covers the change. Branching is step 1 and needs
+    no further asking; the existing-branch check stays, but the
+    default is to branch first, not to wait."""
+    import re
+
+    roles_mod = require_crew("roles")
+    text = re.sub(r"\s+", " ", roles_mod._BUILDER_INSTRUCTIONS)
+    assert "get on a branch before writing any code" in text
+    assert "never implement on main" in text
+    assert "do not need to be asked again" in text
+    assert "do not write any code until you are on it" in text
+    assert "Use the exact file paths the planner named" in text
+
+
 def test_merger_judges_each_pr_on_its_own_sign_off():
     """A changes_requested verdict on another PR never blocks merging
     an approved one — the #36 case."""
