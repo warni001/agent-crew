@@ -40,6 +40,15 @@ def ledger_mod():
     return require_crew("ledger")
 
 
+@pytest.fixture(autouse=True)
+def no_real_branch_setup(main_mod, monkeypatch):
+    """run_one_task sets up a real git branch by default; tests run
+    in the repo checkout, so stub it to identity unless a test says
+    otherwise — a real setup would create branches in the checkout
+    and fetch from the network, breaking the no-network contract."""
+    monkeypatch.setattr(main_mod, "ensure_task_branch", lambda branch: branch)
+
+
 def make_config(config_mod, **overrides):
     env = {
         "FOUNDRY_PROJECT_ENDPOINT": PROJECT_ENDPOINT,
@@ -264,6 +273,66 @@ def test_changes_requested_sign_off_records_stalled(main_mod, config_mod, ledger
     done.assert_not_called()
 
 
+def test_run_one_task_sets_up_the_task_branch(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """Deterministic branching (Nov 27, #75): run_one_task creates
+    crew/task-<n> before the workflow runs and tells the workflow
+    the branch is already checked out; the ledger keeps the original
+    task text."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    seen: list[str] = []
+    ensure = mock.Mock(side_effect=lambda branch: branch)
+    monkeypatch.setattr(main_mod, "ensure_task_branch", ensure)
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+
+    async def _run(workflow, task, config):
+        seen.append(task)
+        _record_sign_off(ledger_mod, path, verdict="approved", pr_number=1)
+        return ["merged PR #1"]
+
+    monkeypatch.setattr(main_mod, "run_task", _run)
+    monkeypatch.setattr(main_mod, "report_stalled", mock.Mock())
+    monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
+    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=7) == 0
+    ensure.assert_called_once_with("crew/task-7")
+    assert seen == [
+        "do the thing\n\nWork on branch: crew/task-7 (already created and "
+        "checked out for this task — do not create another branch; "
+        "confirm with `git branch --show-current` if unsure)."
+    ]
+    started = [e for e in ledger.entries() if e["event"] == "task_started"][0]
+    assert started["task"] == "do the thing"
+    assert started["branch"] == "crew/task-7"
+
+
+def test_run_one_task_continues_without_a_branch_when_setup_fails(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
+    """Branch setup must not kill a run: when git fails, the workflow
+    runs on the plain task, as before."""
+    path = str(tmp_path / "ledger.jsonl")
+    config = make_config(config_mod, CREW_LEDGER_PATH=path)
+    ledger = make_ledger(ledger_mod, tmp_path)
+    seen: list[str] = []
+    monkeypatch.setattr(
+        main_mod, "ensure_task_branch",
+        mock.Mock(side_effect=RuntimeError("no git")),
+    )
+    monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+
+    async def _run(workflow, task, config):
+        seen.append(task)
+        _record_sign_off(ledger_mod, path, verdict="approved", pr_number=1)
+        return ["merged PR #1"]
+
+    monkeypatch.setattr(main_mod, "run_task", _run)
+    monkeypatch.setattr(main_mod, "report_stalled", mock.Mock())
+    monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
+    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=7) == 0
+    assert seen == ["do the thing"]
+    started = [e for e in ledger.entries() if e["event"] == "task_started"][0]
+    assert "branch" not in started
+
+
 @pytest.mark.parametrize("failure", ["initial", "final"])
 def test_unreadable_sign_off_ledger_stalls(
     main_mod, config_mod, ledger_mod, tmp_path, monkeypatch, failure,
@@ -402,12 +471,18 @@ def test_main_explicit_task_runs_once(main_mod, ledger_mod, tmp_path, monkeypatc
     monkeypatch.setenv("KEY_VAULT_URL", "https://kv-example.vault.azure.net/")
     monkeypatch.setenv("CREW_LEDGER_PATH", path)
     monkeypatch.setattr(main_mod, "build_workflow", lambda config: mock.Mock())
+    # One-shot runs have no issue number: the branch is the task hash.
+    monkeypatch.setattr(
+        main_mod, "ensure_task_branch", lambda branch: branch,
+    )
     run_task = _run_task_recording_sign_off(ledger_mod, path, ["done"])
     monkeypatch.setattr(main_mod, "run_task", run_task)
     monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
     assert main_mod.main(["do the thing"]) == 0
     run_task.assert_awaited_once()
-    assert run_task.await_args.args[1] == "do the thing"
+    assert run_task.await_args.args[1].startswith(
+        "do the thing\n\nWork on branch: crew/task-"
+    )
 
 
 # --- settlement closes the original issue and tags it on stalls ---

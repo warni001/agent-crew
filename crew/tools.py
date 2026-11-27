@@ -15,9 +15,11 @@ escape it. No tool ever prints or returns a token.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -235,6 +237,50 @@ def list_open_prs(repo: str, head: str = "") -> str:
     return _run(cmd)
 
 
+def task_branch_name(issue_number: int | None, task: str) -> str:
+    """Deterministic branch for a task: `crew/task-<issue>` for an
+    issue task, else `crew/task-<hash>` from the task text, so a
+    re-queued task reuses its branch and a retry continues its work."""
+    if issue_number is not None:
+        return f"crew/task-{int(issue_number)}"
+    return f"crew/task-{hashlib.sha1(task.encode('utf-8')).hexdigest()[:8]}"
+
+
+_BRANCH_RE = re.compile(r"^crew/task-[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def ensure_task_branch(branch: str) -> str:
+    """Create or check out the task branch in the local checkout, from current main.
+
+    Deterministic branch setup, done in code before the workflow runs —
+    the builder never decides about branches, so there is no branch
+    refusal to stall on (Nov 27, #75: the builder refused twice in
+    prose, once over branching, once over the plan, while making zero
+    tool calls). If the branch already exists locally, check it out (a
+    retry continues its work); if it exists on origin only, check it
+    out tracking origin; otherwise create it from origin/main. The
+    branch stays local until the builder pushes its commits — a branch
+    for a task that stalls immediately leaves nothing on the remote.
+    Raises RuntimeError (via _run) when git fails; the caller degrades
+    to the old behaviour instead of failing the run.
+    """
+    if not _BRANCH_RE.match(branch):
+        raise ValueError(f"refusing unexpected branch name: {branch!r}")
+    _run(["git", "fetch", "origin", "main"])
+    try:
+        _run(["git", "show-ref", "--verify", f"refs/heads/{branch}"])
+    except RuntimeError:
+        # No local branch: track the remote one, or create from main.
+        remote = _run(["git", "ls-remote", "--heads", "origin", branch]).strip()
+        if remote:
+            _run(["git", "checkout", "-b", branch, "--track", f"origin/{branch}"])
+        else:
+            _run(["git", "checkout", "-b", branch, "origin/main"])
+        return branch
+    _run(["git", "checkout", branch])
+    return branch
+
+
 def pr_checks(repo: str, pr_number: int) -> str:
     """Report GitHub CI check status for a pull request, with its head SHA.
 
@@ -424,6 +470,7 @@ __all__ = [
     "read_file", "write_file", "run_pytest", "run_shell",
     "record_sign_off", "check_review_sign_off",
     "list_branches", "list_open_prs", "pr_checks", "read_pr",
+    "task_branch_name", "ensure_task_branch",
     "ALLOWED_REPOS", "GHCR_IMAGE", "image_for_commit", "assert_repo_allowed",
     "READ_TOOLS", "BUILD_TOOLS", "REVIEW_TOOLS", "MERGE_TOOLS", "ALL_TOOLS",
 ]

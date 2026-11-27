@@ -37,6 +37,7 @@ from .blob_ledger import build_ledger
 from .ledger import Ledger
 from .orchestration import build_workflow, format_run_summary, run_task
 from .spend import TRACKER, reset_spend, restore_spend, spent_usd
+from .tools import ensure_task_branch, task_branch_name
 
 # The crew's first task, agreed with the repo owner: build v1 of itself.
 DEFAULT_TASK = (
@@ -202,7 +203,23 @@ def run_one_task(
     issue to close with the outcome. Stalls also tag it.
     """
     log = logging.getLogger("crew")
-    _record(ledger, "task_started", task=task, repo=config.repo)
+    # The task branch is set up in code before the workflow runs: the
+    # builder never decides about branches, so a branch refusal cannot
+    # stall the run (Nov 27, #75). A failure here degrades to the old
+    # behaviour — the workflow runs without the branch line — instead
+    # of failing the run. The branch line goes only to the workflow
+    # input; the ledger keeps the original task text, so settlement
+    # matching is unchanged.
+    branch = None
+    try:
+        branch = ensure_task_branch(task_branch_name(issue_number, task))
+        log.info("task branch: %s", branch)
+    except Exception as exc:  # noqa: BLE001 - branch setup must not kill a run
+        log.warning("could not set up task branch, continuing without one: %s", exc)
+    _record(
+        ledger, "task_started", task=task, repo=config.repo,
+        **({"branch": branch} if branch else {}),
+    )
     try:
         before = len(Ledger(config.ledger_path).sign_offs())
     except Exception as exc:  # noqa: BLE001 - ledger must not kill a run
@@ -210,7 +227,14 @@ def run_one_task(
         before = None
     try:
         workflow = build_workflow(config)
-        outputs = asyncio.run(run_task(workflow, task, config))
+        workflow_task = task
+        if branch is not None:
+            workflow_task = (
+                f"{task}\n\nWork on branch: {branch} (already created and "
+                "checked out for this task — do not create another branch; "
+                "confirm with `git branch --show-current` if unsure)."
+            )
+        outputs = asyncio.run(run_task(workflow, workflow_task, config))
     except Exception as exc:  # noqa: BLE001 - report the failure, then exit 1
         _record(ledger, "task_failed", task=task, error=str(exc))
         log.error("task failed: %s", exc)
