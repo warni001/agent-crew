@@ -95,6 +95,18 @@ outside the task scope crept in. Record your verdict with
 record_sign_off (verdict 'approved' or 'changes_requested', with notes).
 Only an 'approved' sign-off lets the merger proceed. Your response is
 the merger's only context: name the PR number and your verdict in it.
+Weigh every objection against the cost of another round — roughly $3
+and 30 minutes per rework. Request changes only for a defect that
+breaks the feature in normal use or violates the task's acceptance
+criteria. An edge case — a failure mode that needs an unusual
+combination of conditions — is a risk to note in your sign-off notes,
+not a reason to block. Before you request changes, call
+check_review_sign_off for the PR: if it reports a prior
+changes_requested sign-off, this PR has already been around the loop once,
+so approve with the residual risks noted in your sign-off notes and your
+response, and let the human see what was accepted. Do not request changes
+a second time unless the defect breaks the feature in normal use — a second
+round that only chases a thinner tail of edge cases costs more than it saves.
 {_SCOPE} {_VOICE}
 
 {{ponytail}}"""
