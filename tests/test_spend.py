@@ -249,3 +249,177 @@ def test_run_task_refuses_when_tracked_spend_over_line(spend_mod):
     spend_mod.reset_spend(starting_usd=190.0)
     with pytest.raises(RuntimeError, match="crew stopped before starting"):
         asyncio.run(orch_mod.run_task(roles, "do it", config))
+
+
+@pytest.fixture
+def task_runner(tmp_path, monkeypatch):
+    main = require_crew("__main__")
+    ledger = main.Ledger(tmp_path / "ledger.jsonl")
+    monkeypatch.setattr(main, "ensure_task_branch", lambda branch: branch)
+    monkeypatch.setattr(main, "report_done", lambda *args: None)
+    return main, ledger
+
+
+@pytest.mark.parametrize("followup_tokens", [200_000, 250_000])
+def test_task_cost_stops_inside_sdk_tool_loop(task_runner, monkeypatch, spend_mod, followup_tokens):
+    from unittest.mock import Mock
+
+    from agent_framework import Agent, ChatResponse, Content, Message, tool
+    from agent_framework_openai import RawOpenAIChatClient
+
+    main, ledger = task_runner
+    spend_mod.reset_spend(starting_usd=40)
+    calls = []
+    tool_calls = []
+
+    @tool
+    def read_example() -> str:
+        """Read an offline example."""
+        tool_calls.append(1)
+        return "example"
+
+    async def fake_response(self, messages, **kwargs):
+        calls.append(messages)
+        first = len(calls) == 1
+        return ChatResponse(
+            messages=[Message(role="assistant", contents=[Content.from_function_call(
+                call_id=f"call-{len(calls)}", name="read_example", arguments={},
+            )])],
+            model="gpt-6.2-sol",
+            usage_details={"output_token_count": 100_000 if first else followup_tokens},
+        )
+
+    monkeypatch.setattr(RawOpenAIChatClient, "_inner_get_response", fake_response)
+    client = require_crew("clients").CountingChatClient(model="gpt-6-2-sol", api_key="<offline-test>")
+    later = Mock()
+    roles = {"planner": Agent(client, name="planner", tools=[read_example]), "builder": later}
+    monkeypatch.setattr(main, "build_roles", lambda cfg: roles)
+    config = main.CrewConfig(ledger_path=str(ledger.path), deadline_iso="2099-01-01T00:00:00Z")
+
+    assert main.run_one_task(config, ledger, "costly task") == 1
+    started, failed, checkpoint = ledger.entries()
+    assert failed["event"] == "task_failed"
+    assert failed["reason"] == "task_cost_limit"
+    assert len(calls) == 2
+    assert tool_calls == [1]  # the crossing response's tool never runs
+    later.create_session.assert_not_called()
+    total = 41 + followup_tokens / 100_000
+    assert checkpoint["event"] == "spend"
+    assert checkpoint["usd"] == pytest.approx(total)
+    spend_mod.check_task_cost()  # no failed attempt state leaked
+
+    async def next_workflow(roles, task, config):
+        spend_mod.record_usage("gpt-6-2-sol", {"output_token_count": 100_000})
+        spend_mod.check_task_cost()
+        ledger.record("review_sign_off", pr_number=1, verdict="approved")
+        return ["done"]
+
+    monkeypatch.setattr(main, "run_task", next_workflow)
+    assert main.run_one_task(config, ledger, "next task") == 0
+    assert ledger.entries()[-1]["usd"] == pytest.approx(total + 1)
+
+
+def test_task_deadline_cancels_pending_workflow(task_runner, monkeypatch, spend_mod):
+    import asyncio
+
+    main, ledger = task_runner
+    cancelled = []
+
+    async def pending(*args):
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    monkeypatch.setattr(main, "run_task", pending)
+    monkeypatch.setattr(main, "build_roles", lambda config: {})
+    config = main.CrewConfig(ledger_path=str(ledger.path), task_time_limit_minutes=0.002)
+    assert main.run_one_task(config, ledger, "pending task") == 1
+    assert cancelled == [True]
+    assert ledger.entries()[-2]["reason"] == "task_time_limit"
+    assert ledger.entries()[-1]["event"] == "spend"
+    assert spend_mod.remaining_task_seconds() is None
+
+    async def next_workflow(*args):
+        assert spend_mod.remaining_task_seconds() > 0
+        ledger.record("review_sign_off", pr_number=1, verdict="approved")
+        return ["done"]
+
+    monkeypatch.setattr(main, "run_task", next_workflow)
+    assert main.run_one_task(config, ledger, "next task") == 0
+
+
+def test_task_deadline_bounds_branch_subprocess(task_runner, monkeypatch, spend_mod):
+    from unittest.mock import Mock
+
+    main, ledger = task_runner
+    tools = require_crew("tools")
+    monkeypatch.setattr(main, "ensure_task_branch", tools.ensure_task_branch)
+    build_roles = Mock()
+    monkeypatch.setattr(main, "build_roles", build_roles)
+    monkeypatch.setattr(spend_mod, "monotonic", lambda: 100.0)
+
+    def timeout(*, timeout):
+        assert timeout == pytest.approx(60)
+        raise tools.subprocess.TimeoutExpired("git", timeout)
+
+    proc = Mock(pid=1234)
+    proc.communicate.side_effect = timeout
+    popen = Mock(return_value=proc)
+    killpg = Mock()
+    monkeypatch.setattr(tools.subprocess, "Popen", popen)
+    monkeypatch.setattr(tools.os, "killpg", killpg)
+    config = main.CrewConfig(ledger_path=str(ledger.path), task_time_limit_minutes=1)
+    assert main.run_one_task(config, ledger, "branch timeout") == 1
+    assert ledger.entries()[-2]["reason"] == "task_time_limit"
+    build_roles.assert_not_called()
+    assert popen.call_args.kwargs["start_new_session"] is True
+    killpg.assert_called_once_with(1234, tools.signal.SIGKILL)
+    proc.stdout.close.assert_called_once()
+    proc.stderr.close.assert_called_once()
+    proc.wait.assert_called_once_with(timeout=0.25)
+
+
+def test_command_timeout_kills_descendant_after_leader_exits(tmp_path):
+    import os
+    import sys
+    import time
+
+    if sys.platform != "linux":
+        pytest.skip("uses /proc to distinguish a killed orphan from a live process")
+    tools = require_crew("tools")
+    pids = tmp_path / "pids"
+    # The descendant keeps both pipes open after the leader exits. Limit
+    # its lifetime even if _run regresses, and clean up on assertion failure.
+    script = (
+        "import os, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])\n"
+        "Path(sys.argv[1]).write_text(f'{os.getpid()} {child.pid}')\n"
+    )
+    start = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="command timed out"):
+            tools._run([sys.executable, "-c", script, str(pids)], timeout=0.75)
+        assert time.monotonic() - start < 2
+        leader, child = (int(pid) for pid in pids.read_text().split())
+        assert not os.path.exists(f"/proc/{leader}")  # direct child reaped
+
+        def child_running():
+            from pathlib import Path
+            try:
+                return Path(f"/proc/{child}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+            except FileNotFoundError:
+                return False
+
+        until = time.monotonic() + 1
+        while child_running() and time.monotonic() < until:
+            time.sleep(0.01)
+        assert not child_running()
+    finally:
+        if pids.exists():
+            try:
+                os.killpg(int(pids.read_text().split()[0]), tools.signal.SIGKILL)
+            except ProcessLookupError:
+                pass

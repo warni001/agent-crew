@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ from pathlib import Path
 from agent_framework import tool
 
 from .config import ALLOWED_REPO
+from .spend import TaskTimeLimitExceeded, remaining_task_seconds
 
 # Default cap for command diagnostics: ~20KB, about 5k tokens.
 _MAX_OUTPUT = 20_000
@@ -47,7 +49,7 @@ _SHELL_ALLOWED_PREFIXES = (
 
 def _run(
     cmd: list[str],
-    timeout: int = 120,
+    timeout: float = 120,
     max_output: int | None = _MAX_OUTPUT,
     *,
     raw_stdout: bool = False,
@@ -65,16 +67,41 @@ def _run(
     mode, so their diagnostics behave exactly as before. Raw bytes
     are decoded by hand below.
     """
+    remaining_task_seconds()  # Don't start a child for an expired task.
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=not raw_stdout, start_new_session=True,
+    )
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=not raw_stdout, timeout=timeout
-        )
-    except subprocess.TimeoutExpired:
-        message = f"command timed out after {timeout}s: {cmd[0]}"
-        logging.getLogger("crew.tools").warning("command failed: %s", message)
-        raise RuntimeError(message) from None
+        # Process creation itself is not interruptible. Recheck before waiting.
+        remaining = remaining_task_seconds()
+        task_bounded = remaining is not None and remaining <= timeout
+        try:
+            stdout, stderr = proc.communicate(timeout=remaining if task_bounded else timeout)
+        except subprocess.TimeoutExpired:
+            if task_bounded:
+                raise TaskTimeLimitExceeded() from None
+            message = f"command timed out after {timeout}s: {cmd[0]}"
+            logging.getLogger("crew.tools").warning("command failed: %s", message)
+            raise RuntimeError(message) from None
+    except BaseException:
+        # Kill the group even if its leader exited: its descendants may
+        # still hold the pipes. Never wait for EOF again after a timeout.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        finally:
+            proc.stdout.close()
+            proc.stderr.close()
+            try:
+                proc.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                logging.getLogger("crew.tools").warning("could not reap %s promptly", cmd[0])
+        raise
+    remaining_task_seconds()
     if proc.returncode != 0:
-        out = _decode(proc.stdout + proc.stderr).strip()
+        out = _decode(stdout + stderr).strip()
         # Log the failure here, with the command and its output: the
         # framework catches this exception and hands the model a
         # generic "Error: Function failed." (unless detailed errors
@@ -88,8 +115,8 @@ def _run(
         logging.getLogger("crew.tools").warning("command failed: %s", message)
         raise RuntimeError(message)
     if raw_stdout:
-        return _decode(proc.stdout)
-    out = _decode(proc.stdout + proc.stderr).strip()
+        return _decode(stdout)
+    out = _decode(stdout + stderr).strip()
     return out if max_output is None else out[:max_output]
 
 
@@ -98,7 +125,7 @@ def _decode(data: bytes | str) -> str:
 
     `surrogateescape` keeps non-UTF-8 bytes round-trippable instead
     of raising on a binary file. A str passes through unchanged
-    (tests mock subprocess.run with str stdout).
+    (ordinary commands use text mode).
     """
     if isinstance(data, str):
         return data

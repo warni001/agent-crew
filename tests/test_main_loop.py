@@ -648,7 +648,7 @@ def test_done_or_failed_run_closes_only_source_issue(
     monkeypatch.setattr(main_mod, "run_task", run)
     stalled, close, tag = _stall_mocks(main_mod, monkeypatch)
     assert main_mod.run_one_task(config, ledger, "do the thing", issue_number) == int(failed)
-    assert ledger.entries()[-1]["event"] == event
+    assert [e["event"] for e in ledger.entries()][-2:] == [event, "spend"]
     if issue_number is None:
         close.assert_not_called()
     else:

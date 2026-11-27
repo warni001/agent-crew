@@ -18,10 +18,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from agent_framework import Message
+from agent_framework import ChatMiddleware, Message
 from agent_framework_openai import OpenAIChatClient
 
-from .spend import TRACKER, SpendLimitExceeded, record_usage, spent_usd
+from .spend import (
+    TRACKER,
+    SpendLimitExceeded,
+    check_task_cost,
+    record_usage,
+    remaining_task_seconds,
+    spent_usd,
+)
 
 # The exact combination the Nov 19 live probes proved: the classic
 # endpoint with api_version "preview". OpenAIChatClient's Azure
@@ -35,24 +42,42 @@ from .spend import TRACKER, SpendLimitExceeded, record_usage, spent_usd
 AZURE_OPENAI_API_VERSION = "preview"
 
 
+def _check_global_spend() -> None:
+    if TRACKER.should_stop():
+        raise SpendLimitExceeded(
+            f"tracked spend ${spent_usd():.2f} reached the stop line "
+            f"${TRACKER.stop_threshold_usd():.2f}; refusing another model call"
+        )
+
+
+class _SpendMiddleware(ChatMiddleware):
+    """The SDK invokes chat middleware inside its tool-call loop."""
+
+    async def process(self, context, call_next):
+        if context.stream:
+            await call_next()
+            return
+        remaining_task_seconds()
+        check_task_cost()
+        _check_global_spend()
+        await call_next()
+        response = context.result
+        record_usage(
+            getattr(response, "model", None) or context.client.model,
+            getattr(response, "usage_details", None),
+        )
+        # Stop before the SDK executes any tools requested by this response.
+        check_task_cost()
+        remaining_task_seconds()
+
+
 class CountingChatClient(OpenAIChatClient):
-    """OpenAIChatClient that counts real spend from API-reported usage.
+    """Price each non-streaming model response, including tool follow-ups."""
 
-    Every non-streaming call flows through ``get_response`` here: the
-    tracked total is checked *before* the call (a spent budget makes
-    no further API calls), and the usage the API reports on the
-    response is priced and added to the process tracker afterwards
-    (see crew/spend.py). The overshoot past the stop line is therefore
-    at most one call's cost — the call already in flight when the
-    line was crossed.
-
-    Streaming is passed through uncounted: the crew never streams
-    (Agent.run is non-streaming everywhere in this repo). Re-check
-    this if streaming is ever used.
-    """
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, *args: Any, middleware=None, **kwargs: Any) -> None:
+        super().__init__(
+            *args, middleware=[_SpendMiddleware(), *(middleware or ())], **kwargs
+        )
         # include_detailed_errors=True: the framework default is False,
         # so a failed tool call reaches the model as the opaque "Error:
         # Function failed." — the Nov 20 #9 run stalled with two
@@ -72,30 +97,13 @@ class CountingChatClient(OpenAIChatClient):
         options: Any = None,
         **kwargs: Any,
     ):
-        """Count the call, then delegate to the real client."""
         if stream:
-            return super().get_response(
-                messages, stream=True, options=options, **kwargs
-            )
-        if spent_usd() >= TRACKER.stop_threshold_usd():
-            raise SpendLimitExceeded(
-                f"tracked spend ${spent_usd():.2f} reached the stop line "
-                f"${TRACKER.stop_threshold_usd():.2f}; refusing another model call"
-            )
-
-        parent_get_response = super().get_response
-
-        async def _counted():
-            response = await parent_get_response(
-                messages, stream=False, options=options, **kwargs
-            )
-            record_usage(
-                getattr(response, "model", None) or self.model,
-                getattr(response, "usage_details", None),
-            )
-            return response
-
-        return _counted()
+            # Never let streaming (unused by the crew) bypass task accounting.
+            if remaining_task_seconds() is not None:
+                raise ValueError("streaming is not supported under task limits")
+        else:
+            _check_global_spend()
+        return super().get_response(messages, stream=stream, options=options, **kwargs)
 
 
 def _default_factory(endpoint, model, api_version=AZURE_OPENAI_API_VERSION, **kwargs):

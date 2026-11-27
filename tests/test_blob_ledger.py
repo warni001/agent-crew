@@ -148,3 +148,66 @@ class _Config:
     def __init__(self, blob_url="", path="crew-ledger.jsonl"):
         self.ledger_blob_url = blob_url
         self.ledger_path = path
+
+
+@pytest.mark.parametrize("blocked_event", ["task_started", "spend"])
+def test_stuck_blob_append_does_not_block_task_deadline(
+    blocked_event, blob_mod, tmp_path, monkeypatch, caplog,
+):
+    import asyncio
+    from threading import Event
+    from time import monotonic
+
+    main = require_crew("__main__")
+    spend = require_crew("spend")
+    entered, release, checkpoint = Event(), Event(), Event()
+
+    class SlowAppendBlob(FakeAppendBlob):
+        def append_block(self, data):
+            event = json.loads(data)["event"]
+            if event == blocked_event and not entered.is_set():
+                entered.set()
+                if not release.wait(4):
+                    raise RuntimeError("test did not release append")
+            super().append_block(data)
+            if event == "spend" and len(self.data.splitlines()) == 4:
+                checkpoint.set()
+
+    ledger, fake = _blob(blob_mod, SlowAppendBlob())
+    config = main.CrewConfig(
+        azure_openai_endpoint="https://example.openai.azure.com",
+        ledger_path=str(tmp_path / "signoffs.jsonl"), task_time_limit_minutes=0.01,
+    )
+
+    async def pending(*args):
+        spend.record_usage("gpt-6-2-sol", {"output_token_count": 100_000})
+        # The boundary total differs from the milestone total: assert
+        # the newer checkpoint cannot be overtaken by the blocked write.
+        spend.record_usage("gpt-6-2-sol", {"output_token_count": 50_000})
+        await asyncio.Future()
+
+    monkeypatch.setattr(main.CrewConfig, "from_env", lambda: config)
+    monkeypatch.setattr(main, "build_ledger", lambda cfg: ledger)
+    monkeypatch.setattr(main, "ensure_task_branch", lambda branch: branch)
+    monkeypatch.setattr(main, "build_roles", lambda cfg: {})
+    monkeypatch.setattr(main, "run_task", pending)
+    tracker = spend.SpendTracker(milestone_usd=1)
+    monkeypatch.setattr(spend, "TRACKER", tracker)
+    monkeypatch.setattr(main, "TRACKER", tracker)
+
+    start = monotonic()
+    try:
+        assert main.main(["blocked audit write"]) == 1
+        assert monotonic() - start < 2
+        assert entered.is_set()
+        assert not checkpoint.is_set()
+        assert "blob ledger flush timed out" in caplog.text
+    finally:
+        release.set()
+    assert checkpoint.wait(2)
+    started, milestone, failed, boundary = ledger.entries()
+    assert started["event"] == "task_started"
+    assert milestone["event"] == boundary["event"] == "spend"
+    assert failed["event"] == "task_failed"
+    assert failed["reason"] == "task_time_limit"
+    assert [milestone["usd"], boundary["usd"]] == [1.0, 1.5]

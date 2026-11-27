@@ -27,11 +27,10 @@ def _fake_run(monkeypatch, calls):
         calls.append(list(cmd))
         result = mock.Mock()
         result.returncode = 0
-        result.stdout = "Merged pull request #36"
-        result.stderr = ""
+        result.communicate.return_value = ("Merged pull request #36", "")
         return result
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("subprocess.Popen", fake_run)
 
 
 def test_merge_pr_passes_explicit_merge_strategy(monkeypatch, tmp_path):

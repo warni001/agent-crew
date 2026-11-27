@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from queue import Full, Queue
+from threading import Event, Thread
 
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
@@ -57,6 +59,41 @@ class BlobLedger(Ledger):
             blob_url, credential=DefaultAzureCredential()
         )
         self._blob_ready = False
+        self._writes = Queue(maxsize=64)
+        self._writer: Thread | None = None
+
+    def enqueue(self, event: str, fields: dict, *, wait: float = 0) -> None:
+        """Queue a run-loop event; only boundary checkpoints wait briefly.
+
+        The run loop is the sole producer and uses this for all writes.
+        shortcut: a prolonged outage or process exit can lose pending events;
+        add a durable spool if replay across restarts is required.
+        """
+        if self._writer is None:
+            writer = Thread(target=self._write_pending, name="blob-ledger", daemon=True)
+            writer.start()
+            self._writer = writer
+        done = Event() if wait else None
+        # Capture the time of the event, not when the worker reaches Azure.
+        row = {"ts": datetime.now(timezone.utc).isoformat(), **fields}
+        try:
+            self._writes.put_nowait((event, row, done))
+        except Full:
+            log.warning("blob ledger queue full; dropped %s", event)
+            return
+        if done is not None and not done.wait(wait):
+            log.warning("blob ledger flush timed out at %s", event)
+
+    def _write_pending(self) -> None:
+        while True:
+            event, fields, done = self._writes.get()
+            try:
+                self.record(event, **fields)
+            except Exception as exc:  # noqa: BLE001 - audit failure is best effort
+                log.warning("ledger %s failed: %s", event, exc)
+            finally:
+                if done is not None:
+                    done.set()
 
     def record(self, event: str, **fields: object) -> dict:
         """Append one event to the blob, return the entry written."""
