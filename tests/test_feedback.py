@@ -15,6 +15,9 @@ Blocked until ``crew/feedback.py`` is merged; these tests skip until then.
 
 from __future__ import annotations
 
+import json
+from subprocess import CompletedProcess
+
 import pytest
 
 from conftest import require_crew
@@ -224,3 +227,88 @@ def test_tag_task_stalled_tolerates_edit_failure(feedback_mod, monkeypatch):
     monkeypatch.setattr(feedback_mod.subprocess, "run", fake_run)
     feedback_mod.tag_task_stalled("warni001/agent-crew", 42)
     assert len(calls) == 2  # label create + edit attempted, no raise
+
+
+@pytest.fixture
+def report_issues(feedback_mod, monkeypatch):
+    """Keep issue state across mocked GitHub commands."""
+    issues = []
+
+    def run(argv, **kwargs):
+        if argv[1] == "api":
+            assert "--paginate" in argv and "--slurp" in argv
+            assert argv[-1] == "repos/warni001/agent-crew/issues?state=open&per_page=100"
+            output = json.dumps([[row] for row in issues if row["state"] == "open"])
+        elif argv[1:3] == ["issue", "create"]:
+            number = len(issues) + 1
+            output = f"https://github.com/warni001/agent-crew/issues/{number}"
+            issues.append({
+                "number": number, "html_url": output, "labels": [], "state": "open",
+                "title": argv[argv.index("--title") + 1],
+                "body": argv[argv.index("--body") + 1], "comments": [],
+            })
+        else:
+            assert argv[1:3] in (["issue", "comment"], ["issue", "close"])
+            row = issues[int(argv[3]) - 1]
+            row["comments"].append(argv[argv.index(
+                "--comment" if argv[2] == "close" else "--body"
+            ) + 1])
+            if argv[2] == "close":
+                assert any(
+                    other is not row and other["state"] == "open"
+                    and other["html_url"] in row["comments"][-1]
+                    for other in issues
+                )
+                row["state"] = "closed"
+            output = row["html_url"]
+        return CompletedProcess(argv, 0, output, "")
+
+    monkeypatch.setattr(feedback_mod.subprocess, "run", run)
+    return issues
+
+
+@pytest.mark.parametrize("outcome", ["done", "stalled"])
+@pytest.mark.parametrize("issue_number", [None, 84])
+def test_repeated_settlement_comments(feedback_mod, report_issues, outcome, issue_number):
+    report = getattr(feedback_mod, f"report_{outcome}")
+    repo = "warni001/agent-crew"
+    task = "Fix X\n\n" + "x" * 300
+    first_url = report(repo, task, "First summary", issue_number=issue_number)
+    later_task = task if issue_number is None else "Edited task title and body"
+    assert report(repo, later_task, "Second summary", issue_number=issue_number) == first_url
+    [issue] = report_issues
+    assert issue["state"] == "open"
+    [comment] = issue["comments"]
+    assert "Second summary" in comment
+
+
+def test_done_supersedes_legacy_stall(feedback_mod, report_issues):
+    repo = "warni001/agent-crew"
+    task = "Fix X\n\n" + "x" * 300
+    other = feedback_mod.stalled_issue_payload(task + "different", "Unrelated stall")
+    legacy = feedback_mod.stalled_issue_payload(task, "Previous stall")
+    assert other["title"] == legacy["title"]
+    feedback_mod.open_issue(repo, other["title"], other["body"])
+    feedback_mod.open_issue(repo, legacy["title"], legacy["body"])
+
+    done_url = feedback_mod.report_done(repo, task, "Finished", issue_number=84)
+
+    unrelated, stalled, done = report_issues
+    assert unrelated["state"] == "open"
+    assert stalled["state"] == "closed"
+    assert stalled["comments"] == [f"Superseded by {done_url}"]
+    assert done["state"] == "open"
+    assert done["title"].startswith(feedback_mod.DONE_TITLE_PREFIX)
+
+
+def test_lookup_failure_does_not_create_report(feedback_mod, monkeypatch):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv[1])
+        return CompletedProcess(argv, 1, "", "lookup failed")
+
+    monkeypatch.setattr(feedback_mod.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="lookup failed"):
+        feedback_mod.report_done("warni001/agent-crew", "Fix X", "Finished")
+    assert calls == ["api"]

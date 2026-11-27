@@ -312,7 +312,8 @@ def _run_one_task(
         log.warning("task stalled (builder made no tool call):\n%s", summary)
         try:
             url = report_stalled(
-                config.repo, task, summary, reason="builder_no_action"
+                config.repo, task, summary, reason="builder_no_action",
+                issue_number=issue_number,
             )
             log.info("stalled issue posted: %s", url)
         except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
@@ -331,7 +332,8 @@ def _run_one_task(
         log.warning("task stalled (review sign-offs unavailable):\n%s", summary)
         try:
             url = report_stalled(
-                config.repo, task, summary, reason="review_unavailable"
+                config.repo, task, summary, reason="review_unavailable",
+                issue_number=issue_number,
             )
             log.info("stalled issue posted: %s", url)
         except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
@@ -353,7 +355,9 @@ def _run_one_task(
         _record(ledger, "task_stalled", task=task, reason="review")
         log.warning("task stalled (reviewer requested changes):\n%s", summary)
         try:
-            url = report_stalled(config.repo, task, summary, reason="review")
+            url = report_stalled(
+                config.repo, task, summary, reason="review", issue_number=issue_number
+            )
             log.info("stalled issue posted: %s", url)
         except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
             print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
@@ -365,7 +369,9 @@ def _run_one_task(
         _record(ledger, "task_stalled", task=task, reason="no_review")
         log.warning("task stalled (no review recorded):\n%s", summary)
         try:
-            url = report_stalled(config.repo, task, summary, reason="no_review")
+            url = report_stalled(
+                config.repo, task, summary, reason="no_review", issue_number=issue_number
+            )
             log.info("stalled issue posted: %s", url)
         except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
             print(f"warning: could not post stalled issue: {exc}", file=sys.stderr)
@@ -376,7 +382,7 @@ def _run_one_task(
     _record(ledger, "task_finished", task=task, outputs=outputs)
     log.info("task finished:\n%s", summary)
     try:
-        url = report_done(config.repo, task, summary)
+        url = report_done(config.repo, task, summary, issue_number=issue_number)
         log.info("done issue posted: %s", url)
     except Exception as exc:  # noqa: BLE001 - feedback must not fail the run
         print(f"warning: could not post done issue: {exc}", file=sys.stderr)

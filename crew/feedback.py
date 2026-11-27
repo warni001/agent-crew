@@ -7,6 +7,7 @@ waiting for an answer. When a task finishes, `report_done` posts a
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import subprocess
@@ -251,10 +252,76 @@ def done_issue_payload(task: str, summary: str, pr_url: str = "") -> dict:
     }
 
 
-def report_done(repo: str, task: str, summary: str, pr_url: str = "") -> str:
-    """Post a "done" issue update when a task finishes."""
+_REPORT_MARKER = "<!-- crew-settlement: "
+_REPORT_BODY_PREFIXES = {
+    DONE_TITLE_PREFIX: "Task finished: ",
+    STALLED_TITLE_PREFIX: "Task stalled: ",
+}
+
+
+def _post_settlement(
+    repo: str, task: str, payload: dict, prefix: str, issue_number: int | None
+) -> str:
+    """Update the current report and close any superseded reports."""
+    _check_repo(repo)
+    if issue_number is not None and (type(issue_number) is not int or issue_number < 1):
+        raise ValueError("issue number must be a positive integer")
+    key = (
+        f"issue:{issue_number}" if issue_number is not None
+        else f"task:{hashlib.sha256(task.encode('utf-8')).hexdigest()}"
+    )
+    marker = f"{_REPORT_MARKER}{key} -->"
+
+    # The issues endpoint is paginated and does not rely on search indexing,
+    # which can lag behind a just-created report.
+    # shortcut: lookup and create are separate in the single-replica crew;
+    # serialize settlement if concurrent workers are introduced.
+    pages = json.loads(_run([
+        "gh", "api", "--paginate", "--slurp",
+        f"repos/{repo}/issues?state=open&per_page=100",
+    ], raw_stdout=True))
+    matches = []
+    for page in pages:
+        for row in page:
+            if (
+                "pull_request" in row or row["number"] == issue_number
+                or any(label["name"] == TASK_LABEL for label in row["labels"])
+            ):
+                continue
+            title, body = row["title"], row["body"] or ""
+            for outcome, body_prefix in _REPORT_BODY_PREFIXES.items():
+                if not title.startswith(outcome):
+                    continue
+                if body.startswith(_REPORT_MARKER):
+                    matched = body.split("\n", 1)[0] == marker
+                else:
+                    # Older reports begin with the full task, even when the
+                    # title was truncated. Require both to match.
+                    matched = title == _issue_title(outcome, task) and body.startswith(
+                        f"{body_prefix}{task}\n\n"
+                    )
+                if matched:
+                    matches.append((outcome, row))
+                break
+
+    current = next((row for outcome, row in matches if outcome == prefix), None)
+    if current is None:
+        url = open_issue(repo, payload["title"], f"{marker}\n\n{payload['body']}")
+    else:
+        url = current["html_url"]
+        comment_on_task_issue(repo, current["number"], payload["body"])
+    for _, row in matches:
+        if row is not current:
+            close_task_issue(repo, row["number"], f"Superseded by {url}")
+    return url
+
+
+def report_done(
+    repo: str, task: str, summary: str, pr_url: str = "", *, issue_number: int | None = None
+) -> str:
+    """Post or update the open "done" report for a task."""
     payload = done_issue_payload(task, summary, pr_url)
-    return open_issue(repo, payload["title"], payload["body"])
+    return _post_settlement(repo, task, payload, DONE_TITLE_PREFIX, issue_number)
 
 
 def stalled_issue_payload(task: str, summary: str, reason: str = "cap") -> dict:
@@ -310,10 +377,12 @@ def stalled_issue_payload(task: str, summary: str, reason: str = "cap") -> dict:
     }
 
 
-def report_stalled(repo: str, task: str, summary: str, reason: str = "cap") -> str:
-    """Post a "stalled" issue update when a task stalls (cap or review)."""
+def report_stalled(
+    repo: str, task: str, summary: str, reason: str = "cap", *, issue_number: int | None = None
+) -> str:
+    """Post or update the open "stalled" report for a task."""
     payload = stalled_issue_payload(task, summary, reason=reason)
-    return open_issue(repo, payload["title"], payload["body"])
+    return _post_settlement(repo, task, payload, STALLED_TITLE_PREFIX, issue_number)
 
 
 __all__ = [
