@@ -106,7 +106,7 @@ fi
 
 # Quota pre-check (warn-only): a zero TPM quota fails the model
 # deployments. The check prints what the subscription has for the
-# three models in the two regions; if a model is missing, request
+# two models in the two regions; if a model is missing, request
 # quota in the portal (Foundry -> Quotas) or re-run with
 # deployModels=false and add the models later.
 # NOTE: -o tsv drops the model names (they render as None), so the
@@ -115,12 +115,12 @@ echo "Quota pre-check (warn-only)..."
 for LOC in "$LOCATION" "$CLAUDE_LOCATION"; do
   echo "--- $LOC ---"
   OUT="$(az cognitiveservices usage list --location "$LOC" \
-    --query "[?contains(name.value, 'gpt-6.2') || contains(name.value, 'claude-sonnet-5-5')].{model:name.value, used:currentValue, limit:limit}" \
+    --query "[?contains(name.value, 'gpt-5.4-mini') || contains(name.value, 'claude-sonnet-5-5')].{model:name.value, used:currentValue, limit:limit}" \
     -o table 2>/dev/null || true)"
   if [ -n "$OUT" ]; then
     echo "$OUT"
   else
-    echo "  (no quota listed for gpt-6.2 / claude-sonnet-5-5 in $LOC — check the portal)"
+    echo "  (no quota listed for gpt-5.4-mini / claude-sonnet-5-5 in $LOC — check the portal)"
   fi
 done
 

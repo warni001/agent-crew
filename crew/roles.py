@@ -1,8 +1,7 @@
-"""Role agents. One frontier model per role.
-
-Planner + Reviewer run on Astra; Builder + Merger run on Sol.
-Deployment names (gpt-6-2-astra / gpt-6-2-sol) come from config,
-overridable by env.
+"""Role agents. All four roles run on gpt-5.4-mini — the only GPT model
+with TPM quota on this subscription (200K TPM, Data Zone Standard).
+The deployment name (gpt-5-4-mini) comes from config, overridable
+by env.
 
 All API use below was verified against the installed packages
 (agent-framework 1.26.0, agent-framework-openai 1.18.2) — not written

@@ -8,9 +8,10 @@
 //     here or in the template.
 //   Two Azure AI Foundry accounts (AIServices, S0), one per model family,
 //     because the families do not share a region:
-//     - GPT account in the resource-group region: gpt-6.2-astra and
-//       gpt-6.2-sol, Global Standard. Verified against the Foundry region
-//       table: both are available in westus3, not in eastus2.
+//     - GPT account in the resource-group region: gpt-5.4-mini, Data
+//       Zone Standard, version 2026-03-17. The only GPT model with TPM
+//       quota on this subscription (200K TPM Data Zone, verified live
+//       Nov 27) — gpt-6.2 has 0 TPM everywhere on this sub.
 //     - Claude account in eastus2: claude-sonnet-5-5, Global Standard.
 //       Verified against the Claude on Foundry starter kit: eastus2 hosts
 //       all three Claude families.
@@ -46,17 +47,14 @@ param baseName string = 'agent-crew'
 @description('Azure region for the resource group and most resources.')
 param location string = resourceGroup().location
 
-@description('Azure region for the Claude Foundry account. eastus2 hosts all three Claude families; GPT-6.2 is not available there, so the families live in different regions.')
+@description('Azure region for the Claude Foundry account. eastus2 hosts all three Claude families, so the families live in different regions; the GPT account stays in westus3, where its quota was verified.')
 param claudeLocation string = 'eastus2'
 
 @description('Set false to deploy the infrastructure without model deployments (use when TPM quota is not granted yet), then re-run with true.')
 param deployModels bool = true
 
-@description('Global Standard capacity (thousands of TPM) for the Astra deployment.')
-param gptAstraCapacity int = 10
-
-@description('Global Standard capacity (thousands of TPM) for the Sol deployment.')
-param gptSolCapacity int = 10
+@description('Data Zone Standard capacity (thousands of TPM) for the gpt-5.4-mini deployment.')
+param gptMiniCapacity int = 10
 
 @description('Global Standard capacity (thousands of TPM) for the Sonnet deployment.')
 param claudeCapacity int = 10
@@ -161,54 +159,33 @@ resource gptProject 'Microsoft.CognitiveServices/accounts/projects@2025-10-01-pr
   properties: {}
 }
 
-// Model names and versions verified against the Foundry models catalog
-// (learn.microsoft.com, "Foundry Models sold by Azure"): gpt-6.2-astra
-// and gpt-6.2-sol, both version 2026-11-17. Deployments under one
-// account are chained to avoid 409s on concurrent create.
-resource astraDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-10-01-preview' = if (deployModels) {
+// Model name and version verified against the live model list
+// (az cognitiveservices model list, westus3, Nov 27): gpt-5.4-mini,
+// version 2026-03-17, DataZoneStandard in the SKU list. One
+// deployment: all four roles run on it.
+resource miniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-10-01-preview' = if (deployModels) {
   parent: gptAccount
-  name: 'gpt-6-2-astra'
+  name: 'gpt-5-4-mini'
   sku: {
-    name: 'GlobalStandard'
-    capacity: gptAstraCapacity
+    name: 'DataZoneStandard'
+    capacity: gptMiniCapacity
   }
   properties: {
     model: {
       format: 'OpenAI'
-      name: 'gpt-6.2-astra'
-      version: '2026-11-17'
+      name: 'gpt-5.4-mini'
+      version: '2026-03-17'
     }
     versionUpgradeOption: 'OnceCurrentVersionExpired'
   }
   dependsOn: [
     gptProject
-  ]
-}
-
-resource solDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-10-01-preview' = if (deployModels) {
-  parent: gptAccount
-  name: 'gpt-6-2-sol'
-  sku: {
-    name: 'GlobalStandard'
-    capacity: gptSolCapacity
-  }
-  properties: {
-    model: {
-      format: 'OpenAI'
-      name: 'gpt-6.2-sol'
-      version: '2026-11-17'
-    }
-    versionUpgradeOption: 'OnceCurrentVersionExpired'
-  }
-  dependsOn: [
-    gptProject
-    astraDeployment
   ]
 }
 
 // Foundry account for Claude. Separate account in eastus2 because the
-// Claude families are hosted there (starter kit region matrix) while
-// GPT-6.2 is not available in eastus2.
+// Claude families are hosted there (starter kit region matrix); the
+// GPT account stays in westus3, where its quota was verified.
 resource claudeAccount 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
   name: claudeAccountName
   location: claudeLocation

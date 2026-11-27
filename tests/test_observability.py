@@ -92,7 +92,7 @@ def test_counting_client_enables_detailed_errors():
     """
     clients_mod = require_crew("clients")
     client = clients_mod.CountingChatClient(
-        model="gpt-6-2-sol",
+        model="gpt-5-4-mini",
         azure_endpoint="https://example.openai.azure.com",
         credential=mock.MagicMock(),
         api_version="preview",

@@ -1,6 +1,6 @@
 """Repro for the Magentic progress-ledger parse failure (diagnostic scratch).
 
-Sends the exact ORCHESTRATOR_PROGRESS_LEDGER_PROMPT to gpt-6-2-astra through the
+Sends the exact ORCHESTRATOR_PROGRESS_LEDGER_PROMPT to gpt-5-4-mini through the
 same path the manager uses (Agent.run, fresh session, last message) and prints what
 comes back: the last message's text verbatim, its content types, and whether it
 contains a '{'.

@@ -61,11 +61,11 @@ class CrewConfig:
     azure_openai_endpoint: str = ""
     key_vault_url: str = ""
     github_token: str = ""  # From Key Vault at runtime; never logged.
-    planner_model: str = "gpt-6-2-astra"  # Deployment name, not model name.
-    reviewer_model: str = "gpt-6-2-astra"
-    builder_model: str = "gpt-6-2-sol"
-    merger_model: str = "gpt-6-2-sol"
-    manager_model: str = "gpt-6-2-astra"  # Unused under sequential
+    planner_model: str = "gpt-5-4-mini"  # Deployment name, not model name.
+    reviewer_model: str = "gpt-5-4-mini"
+    builder_model: str = "gpt-5-4-mini"
+    merger_model: str = "gpt-5-4-mini"
+    manager_model: str = "gpt-5-4-mini"  # Unused under sequential
     # orchestration (there is no manager agent); retained so the env
     # knob stays valid if a coordinating agent is added back.
     budget_limit_usd: float = 200.0
@@ -118,11 +118,11 @@ class CrewConfig:
             azure_openai_endpoint=env.get("AZURE_OPENAI_ENDPOINT", ""),
             key_vault_url=env.get("KEY_VAULT_URL", ""),
             github_token=env.get("GITHUB_TOKEN", ""),
-            planner_model=env.get("CREW_MODEL_PLANNER", "gpt-6-2-astra"),
-            reviewer_model=env.get("CREW_MODEL_REVIEWER", "gpt-6-2-astra"),
-            builder_model=env.get("CREW_MODEL_BUILDER", "gpt-6-2-sol"),
-            merger_model=env.get("CREW_MODEL_MERGER", "gpt-6-2-sol"),
-            manager_model=env.get("CREW_MODEL_MANAGER", "gpt-6-2-astra"),
+            planner_model=env.get("CREW_MODEL_PLANNER", "gpt-5-4-mini"),
+            reviewer_model=env.get("CREW_MODEL_REVIEWER", "gpt-5-4-mini"),
+            builder_model=env.get("CREW_MODEL_BUILDER", "gpt-5-4-mini"),
+            merger_model=env.get("CREW_MODEL_MERGER", "gpt-5-4-mini"),
+            manager_model=env.get("CREW_MODEL_MANAGER", "gpt-5-4-mini"),
             budget_limit_usd=float(env.get("CREW_BUDGET_LIMIT_USD", "200")),
             budget_spent_usd=float(env.get("CREW_BUDGET_SPENT_USD", "0")),
             deadline_iso=env.get("CREW_DEADLINE", "2026-12-26T20:08:36Z"),
