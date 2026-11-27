@@ -19,7 +19,7 @@
 #      is printed for manual copy. It is shown only once. Do not store it
 #      anywhere else (not in the Key Vault — the crew's managed identity
 #      could read it and gain a deployment credential).
-#   3. Warn-only quota pre-check for the three models (quota is the
+#   3. Warn-only quota pre-check for the two models (quota is the
 #      likeliest deploy blocker; a zero quota fails the model deployments,
 #      not the rest of the template).
 #   4. Deploys infra/main.bicep with infra/main.bicepparam (two Foundry
