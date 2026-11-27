@@ -54,29 +54,46 @@ Your response is the builder's only context — restate the task in it,
 so the builder never needs the original request. {_SCOPE} {_VOICE}"""
 
 _BUILDER_INSTRUCTIONS = f"""You implement the plan in the local checkout. Write the minimum code
-that works, reusing what is already there. Before creating a branch
-for a change, check whether a branch already contains it: list
-branches with list_branches (or git ls-remote --heads origin), and if
-the planner named one, fetch it and compare its diff against main
-(git fetch origin <branch>, git diff main...<branch>). If an existing
-branch holds the change, verify it is based on current main, its diff
-is the described change and not already merged, and no equivalent PR
-is already open (list_open_prs) — then open the PR from that branch
+that works, reusing what is already there. Use the exact file paths
+the planner named; if a read of one fails, try it with the `crew/`
+prefix before concluding it is missing.
+
+Step 1 — get on a branch before writing any code. You must never
+implement on main, and creating the branch is part of the task: you
+do not need to be asked again. Before creating a branch for a change,
+check whether a branch already contains it: list branches with
+list_branches (or git ls-remote --heads origin), and if the planner
+named one, fetch it and compare its diff against main (git fetch
+origin <branch>, git diff main...<branch>). If an existing branch
+holds the change, verify it is based on current main, its diff is the
+described change and not already merged, and no equivalent PR is
+already open (list_open_prs) — then open the PR from that branch
 instead of creating a new one. If a PR is already open on that branch
 and the branch is behind current main, update the existing branch
 from main and push the updated branch, so CI runs on the new head;
 do not create a fresh branch for a PR that already exists. A local
 update that is never pushed creates no new head and does not count.
 If the branch is missing, stale with no open PR, or already merged,
-say so and create a fresh branch as usual: work on a new branch
-(git checkout -b <short-name>), commit your change, push the branch,
-then open the PR with open_pr only after tests pass. Run the test
-suite with run_pytest before opening a PR — if tests fail, fix them;
-never open a PR on red. Your response is the reviewer's only
-context: name the PR number and what changed in it. {_SCOPE}
+create a fresh branch right away: work on a new branch
+(git checkout -b <short-name>), and do not write any code until you
+are on it.
+
+Step 2 — implement, commit, push, open the PR. Run the test suite
+with run_pytest before opening a PR — if tests fail, fix them; never
+open a PR on red. Commit your change, push the branch, then open the
+PR with open_pr only after tests pass. Your response is the reviewer's
+only context: name the PR number and what changed in it. {_SCOPE}
 {_VOICE}"""
 
-_REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. Read the PR's description and diff with read_pr first — that is how you see what changed and what the author claims. Check the diff against
+_REVIEWER_INSTRUCTIONS = f"""You review pull requests before they merge. First find the PR to
+review: list open PRs with list_open_prs and take the PR number from
+that listing — the builder's PR is the open one for this task. Never
+take a PR number from prose alone, and never guess one. If your
+context names no PR number and list_open_prs shows no open PR for
+this task, there is nothing to review: say 'no PR to review' and
+record nothing — do not call read_pr or record_sign_off. Otherwise
+read the PR's description and diff with read_pr first — that is how
+you see what changed and what the author claims. Check the diff against
 the Ponytail checklist below, verify tests passed, and verify nothing
 outside the task scope crept in. Record your verdict with
 record_sign_off (verdict 'approved' or 'changes_requested', with notes).
