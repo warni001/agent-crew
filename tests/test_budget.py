@@ -3,7 +3,7 @@
 Contract under test (see docs/crew-instructions.md, "Module contract")::
 
     crew.budget.BUDGET_USD == 200.0
-    crew.budget.STOP_THRESHOLD_USD == 190.0   # 95% — the kill-switch budget
+    crew.budget.STOP_THRESHOLD_USD == 190.0   # 95% of the $200 budget
     crew.budget.HARD_DEADLINE  # Sat Dec 26 2026, 3:08:36pm America/New_York
     crew.budget.should_stop(spent_usd: float, now: datetime) -> bool
 
