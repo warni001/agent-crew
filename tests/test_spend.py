@@ -81,6 +81,14 @@ def test_dotted_model_name_maps(spend_mod):
     assert spend_mod.price_usd("gpt-5.4-mini", MINI_IN) == pytest.approx(0.83)
 
 
+def test_versioned_model_name_maps(spend_mod):
+    # The Responses API reports the versioned deployment name
+    # "gpt-5.4-mini-2026-03-17"; it prices at mini rates, not the
+    # Astra fallback (Nov 27: the #75 retry logged the Astra warning
+    # and overstated spend ~10x).
+    assert spend_mod.price_usd("gpt-5.4-mini-2026-03-17", MINI_IN) == pytest.approx(0.83)
+
+
 def test_unknown_model_priced_at_fallback_rates(spend_mod):
     # A new deployment can only stop the crew early, never overshoot:
     # unknown models price at the old Astra rates ($8 in / $40 out).

@@ -45,38 +45,34 @@ _VOICE = "Address the reader as 'you' or state things impersonally."
 
 _PLANNER_INSTRUCTIONS = f"""You plan coding tasks for this repo. Break the task into the smallest
 complete steps, in order, naming the files each step touches. Keep it
-minimal: the smallest change that fully works. Before planning each
-step, check for a branch that already contains the change: list
-branches with list_branches and open PRs with list_open_prs. If one
-exists, name the branch (and any open PR for it) in your plan; if none
-exists, say so. Skip any step already merged or covered by an open PR.
-Your response is the builder's only context — restate the task in it,
-so the builder never needs the original request. {_SCOPE} {_VOICE}"""
+minimal: the smallest change that fully works. Name only file paths
+you verified exist with read_repo_file — never write 'possibly
+<file>' and never name a path you have not read; if you could not
+verify a path, leave it out and say the builder should locate the
+smallest relevant file. Before planning each step, check for a branch
+that already contains the change: list branches with list_branches
+and open PRs with list_open_prs. If one exists, name the branch (and
+any open PR for it) in your plan; if none exists, say so. Skip any
+step already merged or covered by an open PR. Your response is the
+builder's only context — restate the task in it, so the builder never
+needs the original request. {_SCOPE} {_VOICE}"""
 
 _BUILDER_INSTRUCTIONS = f"""You implement the plan in the local checkout. Write the minimum code
 that works, reusing what is already there. Use the exact file paths
-the planner named; if a read of one fails, try it with the `crew/`
-prefix before concluding it is missing.
+the planner named. Before concluding anything about the plan —
+especially that it is missing, unverified, or unusable — read the
+files it names with read_file; if a read of one fails, try it with
+the `crew/` prefix. A file you cannot find is a note in your
+response, not a reason to stop: say which file, keep going with the
+rest. Never refuse a task in prose without first calling at least
+one tool.
 
-Step 1 — get on a branch before writing any code. You must never
-implement on main, and creating the branch is part of the task: you
-do not need to be asked again. Before creating a branch for a change,
-check whether a branch already contains it: list branches with
-list_branches (or git ls-remote --heads origin), and if the planner
-named one, fetch it and compare its diff against main (git fetch
-origin <branch>, git diff main...<branch>). If an existing branch
-holds the change, verify it is based on current main, its diff is the
-described change and not already merged, and no equivalent PR is
-already open (list_open_prs) — then open the PR from that branch
-instead of creating a new one. If a PR is already open on that branch
-and the branch is behind current main, update the existing branch
-from main and push the updated branch, so CI runs on the new head;
-do not create a fresh branch for a PR that already exists. A local
-update that is never pushed creates no new head and does not count.
-If the branch is missing, stale with no open PR, or already merged,
-create a fresh branch right away: work on a new branch
-(git checkout -b <short-name>), and do not write any code until you
-are on it.
+Step 1 — you are already on the task branch. The task names the
+branch; it was already created and checked out for this task before
+you started. Confirm it with `git branch --show-current` if unsure, and
+check `git status` and `git log` for work an earlier attempt left
+behind — continue that work instead of starting over. Never create a
+branch, and never implement on main.
 
 Step 2 — implement, commit, push, open the PR. Run the test suite
 with run_pytest before opening a PR — if tests fail, fix them; never

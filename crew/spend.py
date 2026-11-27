@@ -46,6 +46,8 @@ _PRICES_USD_PER_MILLION: dict[str, dict[str, float]] = {
 }
 _ALIASES = {
     "gpt-5.4-mini": "gpt-5-4-mini",
+    # The Responses API reports the versioned deployment name.
+    "gpt-5.4-mini-2026-03-17": "gpt-5-4-mini",
 }
 # Unknown deployment: price at the old Astra rates ($8 in / $0.40
 # cached / $40 out) and say so, so a new model can only stop the crew
