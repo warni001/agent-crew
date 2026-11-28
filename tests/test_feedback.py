@@ -15,6 +15,10 @@ Blocked until ``crew/feedback.py`` is merged; these tests skip until then.
 
 from __future__ import annotations
 
+import json
+from subprocess import CompletedProcess
+from unittest.mock import Mock
+
 import pytest
 
 from conftest import require_crew
@@ -224,3 +228,166 @@ def test_tag_task_stalled_tolerates_edit_failure(feedback_mod, monkeypatch):
     monkeypatch.setattr(feedback_mod.subprocess, "run", fake_run)
     feedback_mod.tag_task_stalled("warni001/agent-crew", 42)
     assert len(calls) == 2  # label create + edit attempted, no raise
+
+
+@pytest.fixture
+def report_issues(feedback_mod, monkeypatch):
+    """Keep issue state across mocked GitHub commands."""
+    monkeypatch.setenv("CREW_GITHUB_USER_ID", "1")
+    issues = []
+
+    def run(argv, **kwargs):
+        if argv[1] == "api":
+            assert "--paginate" in argv and "--slurp" in argv
+            assert argv[-1] == "repos/warni001/agent-crew/issues?state=open&per_page=100"
+            output = json.dumps([[row] for row in issues if row["state"] == "open"])
+        elif argv[1:3] == ["issue", "create"]:
+            number = len(issues) + 1
+            output = f"https://github.com/warni001/agent-crew/issues/{number}"
+            issues.append({
+                "number": number, "html_url": output, "labels": [], "state": "open",
+                "user": {"id": 1},
+                "title": argv[argv.index("--title") + 1],
+                "body": argv[argv.index("--body") + 1], "comments": [],
+            })
+        else:
+            assert argv[1:3] in (["issue", "comment"], ["issue", "close"])
+            row = issues[int(argv[3]) - 1]
+            row["comments"].append(argv[argv.index(
+                "--comment" if argv[2] == "close" else "--body"
+            ) + 1])
+            if argv[2] == "close":
+                assert any(
+                    other is not row and other["state"] == "open"
+                    and other["html_url"] in row["comments"][-1]
+                    for other in issues
+                )
+                row["state"] = "closed"
+            output = row["html_url"]
+        return CompletedProcess(argv, 0, output, "")
+
+    def popen(argv, **kwargs):
+        result = run(argv)
+        proc = Mock(returncode=result.returncode)
+        proc.communicate.return_value = (result.stdout, result.stderr)
+        return proc
+
+    monkeypatch.setattr(feedback_mod.subprocess, "run", run)
+    monkeypatch.setattr(feedback_mod.subprocess, "Popen", popen)
+    return issues
+
+
+@pytest.mark.parametrize("outcome", ["done", "stalled"])
+@pytest.mark.parametrize("issue_number", [None, 84])
+def test_repeated_settlement_comments(feedback_mod, report_issues, outcome, issue_number):
+    report = getattr(feedback_mod, f"report_{outcome}")
+    repo = "warni001/agent-crew"
+    task = "Fix X\n\n" + "x" * 300
+    first_url = report(repo, task, "First summary", issue_number=issue_number)
+    later_task = task if issue_number is None else "Edited task title and body"
+    assert report(repo, later_task, "Second summary", issue_number=issue_number) == first_url
+    [issue] = report_issues
+    assert issue["state"] == "open"
+    [comment] = issue["comments"]
+    assert "Second summary" in comment
+
+
+def test_done_supersedes_legacy_stall(feedback_mod, report_issues):
+    repo = "warni001/agent-crew"
+    task = "Fix X"
+    other = feedback_mod.stalled_issue_payload(task + "\n\nOther work", "Unrelated stall")
+    legacy = feedback_mod.stalled_issue_payload(task, "Previous stall")
+    feedback_mod.open_issue(repo, other["title"], other["body"])
+    feedback_mod.open_issue(repo, legacy["title"], legacy["body"])
+
+    done_url = feedback_mod.report_done(repo, task, "Finished", issue_number=84)
+
+    unrelated, stalled, done = report_issues
+    assert unrelated["state"] == "open"
+    assert stalled["state"] == "closed"
+    assert stalled["comments"] == [f"Superseded by {done_url}"]
+    assert done["state"] == "open"
+    assert done["title"].startswith(feedback_mod.DONE_TITLE_PREFIX)
+
+
+def test_capped_legacy_titles_cannot_identify_task(feedback_mod, report_issues):
+    repo = "warni001/agent-crew"
+    cap = feedback_mod.GITHUB_TITLE_MAX_LENGTH
+    task = "x" * (cap - len(feedback_mod.DONE_TITLE_PREFIX))
+    longer_task = task + "\n\nMore work"
+    for make_payload in (feedback_mod.done_issue_payload, feedback_mod.stalled_issue_payload):
+        legacy = make_payload(longer_task, "Earlier report")
+        shorter = make_payload(task, "Unused summary")
+        assert len(legacy["title"]) == cap and legacy["title"] == shorter["title"]
+        feedback_mod.open_issue(repo, legacy["title"], legacy["body"])
+
+    url = feedback_mod.report_done(repo, task, "Finished", issue_number=84)
+
+    legacy_done, legacy_stalled, fresh = report_issues
+    for issue in (legacy_done, legacy_stalled):
+        assert issue["state"] == "open"
+        assert issue["comments"] == []
+    assert fresh["html_url"] == url
+    assert fresh["body"].startswith("<!-- crew-settlement: issue:84 -->\n\n")
+
+
+@pytest.mark.parametrize("marked_outcome", ["done", "stalled"])
+def test_other_authors_are_not_reused_or_closed(feedback_mod, report_issues, marked_outcome):
+    repo = "warni001/agent-crew"
+    task = "Fix X"
+    for outcome in ("done", "stalled"):
+        payload = getattr(feedback_mod, f"{outcome}_issue_payload")(task, "Earlier report")
+        body = payload["body"]
+        if outcome == marked_outcome:
+            body = f"<!-- crew-settlement: issue:84 -->\n\n{body}"
+        feedback_mod.open_issue(repo, payload["title"], body)
+        report_issues[-1]["user"] = {"id": 2}
+
+    url = feedback_mod.report_done(repo, task, "Finished", issue_number=84)
+
+    foreign_done, foreign_stalled, fresh = report_issues
+    for report in (foreign_done, foreign_stalled):
+        assert report["state"] == "open"
+        assert report["comments"] == []
+    assert fresh["html_url"] == url
+    assert fresh["user"] == {"id": 1}
+    assert "Finished" in fresh["body"]
+
+
+@pytest.mark.parametrize("crew_id", [None, "0", "1_0", "not an ID"])
+def test_unconfigured_author_posts_fresh(feedback_mod, report_issues, monkeypatch, crew_id):
+    repo = "warni001/agent-crew"
+    first = feedback_mod.report_done(repo, "Fix X", "First report")
+    if crew_id is None:
+        monkeypatch.delenv("CREW_GITHUB_USER_ID")
+    else:
+        monkeypatch.setenv("CREW_GITHUB_USER_ID", crew_id)
+    assert feedback_mod.report_done(repo, "Fix X", "Second report") != first
+    assert report_issues[0]["comments"] == []
+    assert report_issues[0]["state"] == "open"
+
+
+@pytest.mark.parametrize("author", [None, {}, {"id": True}, {"id": "1"}, {"id": 1.0}])
+def test_unverified_author_metadata_posts_fresh(feedback_mod, report_issues, author):
+    repo = "warni001/agent-crew"
+    first = feedback_mod.report_done(repo, "Fix X", "First report")
+    report_issues[0]["user"] = author
+    assert feedback_mod.report_done(repo, "Fix X", "Second report") != first
+    assert report_issues[0]["comments"] == []
+    assert report_issues[0]["state"] == "open"
+
+
+def test_lookup_failure_does_not_create_report(feedback_mod, monkeypatch):
+    monkeypatch.setenv("CREW_GITHUB_USER_ID", "1")
+    calls = []
+
+    def popen(argv, **kwargs):
+        calls.append(argv[1])
+        proc = Mock(returncode=1)
+        proc.communicate.return_value = ("", "lookup failed")
+        return proc
+
+    monkeypatch.setattr(feedback_mod.subprocess, "Popen", popen)
+    with pytest.raises(RuntimeError, match="lookup failed"):
+        feedback_mod.report_done("warni001/agent-crew", "Fix X", "Finished")
+    assert calls == ["api"]

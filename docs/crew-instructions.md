@@ -116,8 +116,15 @@ another repo is rejected before it runs. There are no exceptions.
   "derive it from `FOUNDRY_PROJECT_ENDPOINT`"
 - `GITHUB_TOKEN` — the crew PAT, set from the vault by the Container App
   secret ref (the `gh` CLI reads the same secret as `GH_TOKEN`)
+- `CREW_GITHUB_USER_ID` — optional positive numeric GitHub user ID for your
+  dedicated crew account. Set this in the crew runtime environment and use
+  a runtime token belonging to that account. To check the ID with that token,
+  run `gh api user --jq .id`. Don't use a shared personal account: its ID
+  can't distinguish crew reports from issues you posted. Without a valid ID,
+  the crew posts fresh settlement reports instead of commenting on or closing
+  existing reports. Reports with no verified matching author are left alone.
 
-No secrets in code. No `.env` reads. A missing variable is a hard
+No secrets in code. No `.env` reads. A missing required variable is a hard
 error naming the variable.
 
 ## Stop rules (spend and deadline)
