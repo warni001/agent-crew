@@ -310,10 +310,13 @@ def _post_settlement(
                 if body.startswith(_REPORT_MARKER):
                     matched = body.split("\n", 1)[0] == marker
                 else:
-                    # Older reports begin with the full task, even when the
-                    # title was truncated. Require both to match.
-                    matched = title == _issue_title(outcome, task) and body.startswith(
-                        f"{body_prefix}{task}\n\n"
+                    # At the cap, a truncated title and a paragraph break
+                    # in the task can look like the end of a legacy report's task.
+                    full_title = f"{outcome}{task}"
+                    matched = (
+                        len(full_title) < GITHUB_TITLE_MAX_LENGTH
+                        and title == full_title
+                        and body.startswith(f"{body_prefix}{task}\n\n")
                     )
                 if matched:
                     matches.append((outcome, row))
