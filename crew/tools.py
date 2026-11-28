@@ -480,7 +480,7 @@ BUILD_TOOLS = [tool(f) for f in (
 )]
 REVIEW_TOOLS = [tool(f) for f in (
     read_repo_file, read_file, comment_on_pr, record_sign_off, pr_checks,
-    read_pr, list_open_prs,
+    read_pr, list_open_prs, check_review_sign_off,
 )]
 MERGE_TOOLS = [tool(f) for f in (
     merge_pr, comment_on_pr, check_review_sign_off, pr_checks,
