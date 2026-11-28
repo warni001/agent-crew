@@ -247,23 +247,12 @@ def _run_one_task(
     outcome. Stalls also tag it.
     """
     log = logging.getLogger("crew")
-    # The task branch is set up in code before the run: the
-    # builder never decides about branches, so a branch refusal cannot
-    # stall the run (Nov 27, #75). A failure here degrades to the old
-    # behaviour — the run continues without the branch line — instead
-    # of failing the run. The branch line goes only to the run
-    # input; the ledger keeps the original task text, so settlement
-    # matching is unchanged.
+    branch = None
     try:
         with task_limits(config.task_cost_limit_usd, config.task_time_limit_minutes):
-            branch = None
             try:
-                branch = ensure_task_branch(task_branch_name(issue_number, task))
+                branch = ensure_task_branch(task_branch_name(issue_number, task), config.ledger_path)
                 log.info("task branch: %s", branch)
-            except TaskLimitExceeded:
-                raise
-            except Exception as exc:  # noqa: BLE001 - branch setup must not kill a run
-                log.warning("could not set up task branch, continuing without one: %s", exc)
             finally:
                 _record(
                     ledger, "task_started", task=task, repo=config.repo,
@@ -276,19 +265,19 @@ def _run_one_task(
                 before = None
             remaining_task_seconds()
             roles = build_roles(config)
-            workflow_task = task
-            if branch is not None:
-                workflow_task = (
-                    f"{task}\n\nWork on branch: {branch} (already created and "
-                    "checked out for this task — do not create another branch; "
-                    "confirm with `git branch --show-current` if unsure)."
-                )
+            workflow_task = (
+                f"{task}\n\nWork on branch: {branch} (already created and "
+                "checked out for this task — do not create another branch; "
+                "confirm with `git branch --show-current` if unsure)."
+            )
             outputs = asyncio.run(_run_with_deadline(roles, workflow_task, config))
     except Exception as exc:  # noqa: BLE001 - report the failure, then exit 1
         fields = {"reason": exc.reason} if isinstance(exc, TaskLimitExceeded) else {}
         _record(ledger, "task_failed", task=task, error=str(exc), **fields)
         log.error("task failed: %s", exc)
         comment = f"Failed: {exc}." if fields else "Failed: the run raised an exception."
+        if branch is None and not fields:
+            comment = f"Failed to prepare the task workspace:\n\n{exc}"
         _settle_task_issue(config, issue_number, comment)
         return 1
 

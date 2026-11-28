@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from unittest import mock
 
+import pytest
+
 from conftest import require_crew
 
 
@@ -118,50 +120,117 @@ def test_task_branch_name_from_issue_and_text():
     assert tools_mod.task_branch_name(None, "do the thing") == hashed
 
 
-def test_ensure_task_branch_creates_from_main_when_missing(monkeypatch):
-    tools_mod = require_crew("tools")
-    calls: list[list[str]] = []
-    _scripted_run(monkeypatch, calls, {
-        ("git", "show-ref", "--verify", "refs/heads/crew/task-75"): (1, ""),
-        ("git", "ls-remote", "--heads", "origin", "crew/task-75"): (0, ""),
-    })
-    assert tools_mod.ensure_task_branch("crew/task-75") == "crew/task-75"
-    assert calls == [
-        ["git", "fetch", "origin", "main"],
-        ["git", "show-ref", "--verify", "refs/heads/crew/task-75"],
-        ["git", "ls-remote", "--heads", "origin", "crew/task-75"],
-        ["git", "checkout", "-b", "crew/task-75", "origin/main"],
-    ]
+@pytest.fixture
+def git_checkout(tmp_path, monkeypatch):
+    import subprocess
+
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    monkeypatch.chdir(origin)
+    monkeypatch.delenv("CREW_LEDGER_PATH", raising=False)
+
+    def git(*args):
+        return subprocess.check_output(["git", *args], text=True).strip()
+
+    git("init", "-b", "main")
+    git("config", "user.name", "Offline test")
+    git("config", "user.email", "test@example.invalid")
+    for name in ("infra/main.bicep", ".github/workflows/ci.yml", "entrypoint.sh"):
+        path = origin / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("original\n")
+    git("add", ".")
+    git("commit", "-m", "original")
+    clone = tmp_path / "checkout"
+    git("clone", str(origin), str(clone))
+    monkeypatch.chdir(clone)
+    git("config", "user.name", "Offline test")
+    git("config", "user.email", "test@example.invalid")
+    return git, clone, origin
 
 
-def test_ensure_task_branch_checks_out_existing_local_branch(monkeypatch):
-    """The Nov 20 duplicate-branch regression, at the code level: an
-    existing branch is checked out, not rebuilt on a fresh one."""
-    tools_mod = require_crew("tools")
-    calls: list[list[str]] = []
-    _scripted_run(monkeypatch, calls, {})
-    assert tools_mod.ensure_task_branch("crew/task-75") == "crew/task-75"
-    assert calls == [
-        ["git", "fetch", "origin", "main"],
-        ["git", "show-ref", "--verify", "refs/heads/crew/task-75"],
-        ["git", "checkout", "crew/task-75"],
-    ]
+@pytest.mark.parametrize("ledger_path", ["crew-ledger.jsonl", "state/custom [1].jsonl"])
+def test_ensure_task_branch_cleans_every_attempt(git_checkout, monkeypatch, ledger_path):
+    git, clone, origin = git_checkout
+    tools = require_crew("tools")
+    for name in {ledger_path, "crew-ledger.jsonl", ".env.test", "settings.local"}:
+        path = clone / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("preserve me")
+
+    # Advance upstream after cloning; the first attempt must fetch it.
+    monkeypatch.chdir(origin)
+    (origin / "new-main").write_text("fresh")
+    git("add", ".")
+    git("commit", "-m", "advance main")
+    upstream = git("rev-parse", "HEAD")
+    monkeypatch.chdir(clone)
+
+    def dirty():
+        git("rm", "infra/main.bicep")
+        (clone / ".github/workflows/ci.yml").unlink()
+        entrypoint = clone / "entrypoint.sh"
+        entrypoint.write_text("changed\n")
+        entrypoint.chmod(0o755)
+        (clone / "scratch").write_text("discard")
+
+    branch = "crew/task-75"
+    dirty()
+    assert tools.ensure_task_branch(branch, ledger_path) == branch
+    assert git("rev-parse", "main") == git("rev-parse", "HEAD") == upstream
+    assert git("status", "--short") == ""
+    (clone / "saved-work").write_text("committed")
+    git("add", "saved-work")
+    git("commit", "-m", "keep task commit")
+    saved = git("rev-parse", "HEAD")
+
+    dirty()
+    assert tools.ensure_task_branch(branch, ledger_path) == branch
+    assert git("rev-parse", "HEAD") == saved
+    assert git("branch", "--show-current") == branch
+    assert git("status", "--short") == ""
+    for name in {ledger_path, "crew-ledger.jsonl", ".env.test", "settings.local"}:
+        assert (clone / name).read_text() == "preserve me"
 
 
-def test_ensure_task_branch_tracks_remote_only_branch(monkeypatch):
-    tools_mod = require_crew("tools")
-    calls: list[list[str]] = []
-    _scripted_run(monkeypatch, calls, {
-        ("git", "show-ref", "--verify", "refs/heads/crew/task-75"): (1, ""),
-        ("git", "ls-remote", "--heads", "origin", "crew/task-75"): (
-            0, "abc123\trefs/heads/crew/task-75\n",
-        ),
-    })
-    assert tools_mod.ensure_task_branch("crew/task-75") == "crew/task-75"
-    assert [
-        "git", "checkout", "-b", "crew/task-75",
-        "--track", "origin/crew/task-75",
-    ] in calls
+def test_ensure_task_branch_fetches_remote_only_branch(git_checkout, monkeypatch):
+    git, clone, origin = git_checkout
+    branch = "crew/task-75"
+    monkeypatch.chdir(origin)
+    git("checkout", "-b", branch)
+    git("commit", "--allow-empty", "-m", "remote work")
+    expected = git("rev-parse", "HEAD")
+    monkeypatch.chdir(clone)
+    assert require_crew("tools").ensure_task_branch(branch) == branch
+    assert git("rev-parse", "HEAD") == expected
+    assert git("rev-parse", "@{upstream}") == expected
+
+
+def test_ensure_task_branch_protects_staged_ledger(git_checkout):
+    git, clone, _ = git_checkout
+    ledger = clone / "crew-ledger.jsonl"
+    ledger.write_text("preserve me")
+    git("add", ledger.name)
+    with pytest.raises(RuntimeError, match="protected runtime data: crew-ledger.jsonl"):
+        require_crew("tools").ensure_task_branch("crew/task-75")
+    assert ledger.read_text() == "preserve me"
+
+
+@pytest.mark.parametrize("branch_to_fail", ["main", "crew/task-75"])
+def test_ensure_task_branch_reports_residual_dirt(git_checkout, monkeypatch, branch_to_fail):
+    git, _, _ = git_checkout
+    tools = require_crew("tools")
+    run = tools._run
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "status"] and git("branch", "--show-current") == branch_to_fail:
+            return " D infra/main.bicep\n?? scratch\n"
+        return run(cmd, **kwargs)
+
+    monkeypatch.setattr(tools, "_run", fake_run)
+    with pytest.raises(RuntimeError, match=rf"dirty on {branch_to_fail}:[\s\S]*infra/main.bicep[\s\S]*scratch"):
+        tools.ensure_task_branch("crew/task-75")
+    assert git("branch", "--show-current") == branch_to_fail
 
 
 def test_ensure_task_branch_rejects_unexpected_names():
@@ -179,7 +248,7 @@ def test_ensure_task_branch_failure_raises(monkeypatch):
     tools_mod = require_crew("tools")
     calls: list[list[str]] = []
     _scripted_run(monkeypatch, calls, {
-        ("git", "fetch", "origin", "main"): (1, "fatal: no network"),
+        ("git", "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"): (1, "fatal: no network"),
     })
     with pytest.raises(RuntimeError):
         tools_mod.ensure_task_branch("crew/task-75")

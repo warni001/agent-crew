@@ -46,7 +46,7 @@ def no_real_branch_setup(main_mod, monkeypatch):
     in the repo checkout, so stub it to identity unless a test says
     otherwise — a real setup would create branches in the checkout
     and fetch from the network, breaking the no-network contract."""
-    monkeypatch.setattr(main_mod, "ensure_task_branch", lambda branch: branch)
+    monkeypatch.setattr(main_mod, "ensure_task_branch", lambda branch, ledger_path: branch)
 
 
 def make_config(config_mod, **overrides):
@@ -282,10 +282,13 @@ def test_run_one_task_sets_up_the_task_branch(main_mod, config_mod, ledger_mod, 
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
     seen: list[str] = []
-    ensure = mock.Mock(side_effect=lambda branch: branch)
+    ensure = mock.Mock(side_effect=lambda branch, ledger_path: branch)
     monkeypatch.setattr(main_mod, "ensure_task_branch", ensure)
-    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
+    def build_roles(config):
+        ensure.assert_called_once_with("crew/task-7", path)
+        return mock.Mock()
 
+    monkeypatch.setattr(main_mod, "build_roles", build_roles)
     async def _run(workflow, task, config):
         seen.append(task)
         _record_sign_off(ledger_mod, path, verdict="approved", pr_number=1)
@@ -295,7 +298,7 @@ def test_run_one_task_sets_up_the_task_branch(main_mod, config_mod, ledger_mod, 
     monkeypatch.setattr(main_mod, "report_stalled", mock.Mock())
     monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
     assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=7) == 0
-    ensure.assert_called_once_with("crew/task-7")
+    ensure.assert_called_once_with("crew/task-7", path)
     assert seen == [
         "do the thing\n\nWork on branch: crew/task-7 (already created and "
         "checked out for this task — do not create another branch; "
@@ -306,31 +309,31 @@ def test_run_one_task_sets_up_the_task_branch(main_mod, config_mod, ledger_mod, 
     assert started["branch"] == "crew/task-7"
 
 
-def test_run_one_task_continues_without_a_branch_when_setup_fails(main_mod, config_mod, ledger_mod, tmp_path, monkeypatch):
-    """Branch setup must not kill a run: when git fails, the workflow
-    runs on the plain task, as before."""
+@pytest.mark.parametrize("error", ["git fetch failed", "workspace still dirty on main:\n D infra/main.bicep"])
+def test_run_one_task_stops_when_setup_fails(
+    main_mod, config_mod, ledger_mod, tmp_path, monkeypatch, caplog, error,
+):
     path = str(tmp_path / "ledger.jsonl")
     config = make_config(config_mod, CREW_LEDGER_PATH=path)
     ledger = make_ledger(ledger_mod, tmp_path)
-    seen: list[str] = []
     monkeypatch.setattr(
         main_mod, "ensure_task_branch",
-        mock.Mock(side_effect=RuntimeError("no git")),
+        mock.Mock(side_effect=RuntimeError(error)),
     )
-    monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
-
-    async def _run(workflow, task, config):
-        seen.append(task)
-        _record_sign_off(ledger_mod, path, verdict="approved", pr_number=1)
-        return ["merged PR #1"]
-
-    monkeypatch.setattr(main_mod, "run_task", _run)
-    monkeypatch.setattr(main_mod, "report_stalled", mock.Mock())
-    monkeypatch.setattr(main_mod, "report_done", lambda *a, **k: "https://example/1")
-    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=7) == 0
-    assert seen == ["do the thing"]
-    started = [e for e in ledger.entries() if e["event"] == "task_started"][0]
+    build_roles, run, close = mock.Mock(), mock.AsyncMock(), mock.Mock()
+    monkeypatch.setattr(main_mod, "build_roles", build_roles)
+    monkeypatch.setattr(main_mod, "run_task", run)
+    monkeypatch.setattr(main_mod, "close_task_issue", close)
+    assert main_mod.run_one_task(config, ledger, "do the thing", issue_number=7) == 1
+    build_roles.assert_not_called()
+    run.assert_not_called()
+    started, failed, spend = ledger.entries()
     assert "branch" not in started
+    assert failed["event"] == "task_failed"
+    assert failed["error"] == error
+    assert spend["event"] == "spend"
+    assert error in caplog.text
+    close.assert_called_once_with(config.repo, 7, f"Failed to prepare the task workspace:\n\n{error}")
 
 
 @pytest.mark.parametrize("failure", ["initial", "final"])
@@ -517,7 +520,7 @@ def test_main_explicit_task_runs_once(main_mod, ledger_mod, tmp_path, monkeypatc
     monkeypatch.setattr(main_mod, "build_roles", lambda config: mock.Mock())
     # One-shot runs have no issue number: the branch is the task hash.
     monkeypatch.setattr(
-        main_mod, "ensure_task_branch", lambda branch: branch,
+        main_mod, "ensure_task_branch", lambda branch, ledger_path: branch,
     )
     run_task = _run_task_recording_sign_off(ledger_mod, path, ["done"])
     monkeypatch.setattr(main_mod, "run_task", run_task)
