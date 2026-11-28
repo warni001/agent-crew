@@ -28,6 +28,12 @@
 #      GitHubToken — from GITHUB_CREW_TOKEN in the environment (or a
 #      repo-root .env, never committed). Warns and skips when the token
 #      is not supplied; the crew cannot reach GitHub until it is stored.
+#   6. Stores the reviewer's classic token in the Key Vault as
+#      ReviewerGitHubToken — from REVIEWER_GITHUB_TOKEN in the
+#      environment (or a repo-root .env, never committed). Skips when
+#      the vault already has it; warns and skips when the token is not
+#      supplied. Without it the reviewer cannot post formal GitHub
+#      reviews, so the merger cannot merge without a human approval.
 #
 # Re-running is safe: the deployment is incremental. It WILL reset the
 # deploy SP credential each run and update the repo secret to match.
@@ -54,8 +60,8 @@ echo "Tenant: $TENANT_ID"
 
 # Local .env (repo root, never committed): CLAUDE_ORGANIZATION_NAME,
 # CLAUDE_COUNTRY_CODE, CLAUDE_INDUSTRY, BUDGET_NOTIFY_EMAIL,
-# GITHUB_CREW_TOKEN. The bicepparam file reads the Claude values from
-# the environment.
+# GITHUB_CREW_TOKEN, REVIEWER_GITHUB_TOKEN. The bicepparam file reads
+# the Claude values from the environment.
 if [ -f ../.env ]; then
     set -a
     # shellcheck disable=SC1091
@@ -173,6 +179,32 @@ else
   echo "warning: GITHUB_CREW_TOKEN not set and GitHubToken is not in the vault; the crew cannot reach GitHub until it is stored." >&2
   echo "  Create the fine-grained token in the GitHub web UI (Settings -> Developer settings -> Personal access tokens -> Fine-grained tokens), scoped to agent-crew only, then run:" >&2
   echo "    az keyvault secret set --vault-name $KEY_VAULT_NAME --name GitHubToken --value \"\$TOKEN\" -o none" >&2
+fi
+
+# Reviewer token: the muse-code-agent classic token (public_repo scope),
+# stored as ReviewerGitHubToken. Same shape as the crew token above:
+# skips when the vault already has it, stores it when supplied, warns
+# when neither. The token value is never printed.
+if az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name ReviewerGitHubToken >/dev/null 2>&1; then
+  echo "ReviewerGitHubToken already in Key Vault $KEY_VAULT_NAME; skipping."
+elif [ -n "${REVIEWER_GITHUB_TOKEN:-}" ]; then
+  # Same grant as the crew token above: needed when the crew token
+  # already existed (so its block never granted the role to this
+  # deployer) and this is a fresh vault secret for them.
+  DEPLOYER_OID="$(az ad signed-in-user show --query id -o tsv)"
+  VAULT_SCOPE="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.KeyVault/vaults/$KEY_VAULT_NAME"
+  if [ -z "$(az role assignment list --assignee "$DEPLOYER_OID" --role "Key Vault Secrets Officer" --scope "$VAULT_SCOPE" --query "[0].id" -o tsv)" ]; then
+    az role assignment create --assignee "$DEPLOYER_OID" --role "Key Vault Secrets Officer" --scope "$VAULT_SCOPE" -o none
+    echo "Granted Key Vault Secrets Officer on $KEY_VAULT_NAME to the deployer; waiting 45s for propagation..."
+    sleep 45
+  fi
+  az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name ReviewerGitHubToken --value "$REVIEWER_GITHUB_TOKEN" -o none
+  unset REVIEWER_GITHUB_TOKEN
+  echo "Stored ReviewerGitHubToken in Key Vault $KEY_VAULT_NAME."
+else
+  echo "warning: REVIEWER_GITHUB_TOKEN not set and ReviewerGitHubToken is not in the vault; the reviewer cannot post formal GitHub reviews until it is stored." >&2
+  echo "  Create the classic token in the GitHub web UI (Settings -> Developer settings -> Personal access tokens -> Tokens (classic)), public_repo scope, then run:" >&2
+  echo "    az keyvault secret set --vault-name $KEY_VAULT_NAME --name ReviewerGitHubToken --value \"\$TOKEN\" -o none" >&2
 fi
 
 echo
