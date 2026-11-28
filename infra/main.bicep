@@ -344,6 +344,11 @@ resource crewApp 'Microsoft.App/containerApps@2024-03-01' = {
           keyVaultUrl: '${vault.properties.vaultUri}secrets/GitHubToken'
           identity: 'system'
         }
+        {
+          name: 'reviewergithubtoken'
+          keyVaultUrl: '${vault.properties.vaultUri}secrets/ReviewerGitHubToken'
+          identity: 'system'
+        }
       ]
     }
     template: {
@@ -390,6 +395,16 @@ resource crewApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'GH_TOKEN'
               secretRef: 'githubtoken'
+            }
+            {
+              // The reviewer posts formal GitHub reviews as
+              // muse-code-agent. The crew token belongs to the PR
+              // author, and GitHub blocks self-approval, so the
+              // reviewer needs its own credential. Same vault
+              // pattern as GITHUB_TOKEN; the app identity already
+              // has Key Vault Secrets User on the whole vault.
+              name: 'REVIEWER_GITHUB_TOKEN'
+              secretRef: 'reviewergithubtoken'
             }
           ]
         }
