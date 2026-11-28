@@ -26,6 +26,9 @@ without sign-off.
    verdict for that PR to be `approved`. A later `changes_requested`
    verdict supersedes an earlier approval. No sign-off, an unreadable
    ledger, or approval for another PR leaves the gate closed.
+   `record_sign_off` posts a formal GitHub review before appending the
+   same verdict to the ledger. A failed GitHub review does not add a
+   sign-off.
    This check does not replace the separate CI gate.
 3. **Ponytail check.** The Reviewer checks the PR against
    `ponytail.md`: first rung that works, no abstraction for later,
@@ -116,6 +119,10 @@ another repo is rejected before it runs. There are no exceptions.
   "derive it from `FOUNDRY_PROJECT_ENDPOINT`"
 - `GITHUB_TOKEN` — the crew PAT, set from the vault by the Container App
   secret ref (the `gh` CLI reads the same secret as `GH_TOKEN`)
+- `REVIEWER_GITHUB_TOKEN` — the separate `muse-code-agent` PAT, used
+  only for `gh pr review`. Set up the Container App secret reference
+  below before relying on formal reviews. If the variable is missing at
+  review time, sign-off fails without falling back to the crew PAT.
 - `CREW_GITHUB_USER_ID` — optional positive numeric GitHub user ID for your
   dedicated crew account. Set this in the crew runtime environment and use
   a runtime token belonging to that account. To check the ID with that token,
@@ -126,6 +133,24 @@ another repo is rejected before it runs. There are no exceptions.
 
 No secrets in code. No `.env` reads. A missing required variable is a hard
 error naming the variable.
+
+### One-time reviewer credential setup
+
+Store the separate `muse-code-agent` PAT in Key Vault as
+`ReviewerGitHubToken` (you can use `infra/deploy.sh` when provisioning the
+vault). As the Azure operator, add a vault-backed reference to the existing
+Container App. Set `VAULT_URL` to the app's `KEY_VAULT_URL` value; these
+commands pass the secret URI, not the PAT. The env update creates a revision;
+subsequent image-only deploys retain the reference.
+
+```bash
+az containerapp secret set -g rg-agent-crew -n ca-agent-crew \
+  --secrets "reviewergithubtoken=keyvaultref:${VAULT_URL%/}/secrets/ReviewerGitHubToken,identityref:system" \
+  --output none
+az containerapp update -g rg-agent-crew -n ca-agent-crew \
+  --set-env-vars REVIEWER_GITHUB_TOKEN=secretref:reviewergithubtoken \
+  --output none
+```
 
 ## Stop rules (spend and deadline)
 

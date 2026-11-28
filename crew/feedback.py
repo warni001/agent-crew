@@ -13,7 +13,7 @@ import logging
 import os
 import subprocess
 
-from .tools import _check_repo, _run
+from .tools import _check_repo, _child_env, _run
 
 # Label an issue carries when it is a task for the crew to pick up.
 TASK_LABEL = "crew-task"
@@ -67,7 +67,7 @@ def _gh_json(repo: str, args: list[str]) -> list[dict]:
     """
     proc = subprocess.run(
         ["gh", *args, "--repo", repo],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, env=_child_env(),
     )
     out = (proc.stdout + proc.stderr).strip()
     if proc.returncode != 0:
@@ -93,7 +93,7 @@ def _gh(repo: str, args: list[str]) -> str:
     """
     proc = subprocess.run(
         ["gh", *args, "--repo", repo],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, env=_child_env(),
     )
     out = (proc.stdout + proc.stderr).strip()
     if proc.returncode != 0:
