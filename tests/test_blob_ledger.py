@@ -188,7 +188,7 @@ def test_stuck_blob_append_does_not_block_task_deadline(
 
     monkeypatch.setattr(main.CrewConfig, "from_env", lambda: config)
     monkeypatch.setattr(main, "build_ledger", lambda cfg: ledger)
-    monkeypatch.setattr(main, "ensure_task_branch", lambda branch: branch)
+    monkeypatch.setattr(main, "ensure_task_branch", lambda branch, ledger_path: branch)
     monkeypatch.setattr(main, "build_roles", lambda cfg: {})
     monkeypatch.setattr(main, "run_task", pending)
     tracker = spend.SpendTracker(milestone_usd=1)

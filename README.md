@@ -233,6 +233,14 @@ the tests do not.
 With the runtime environment above configured, start the crew from the
 repo root with `python -m crew`. Pass a task string to run just that task.
 
+Use a dedicated checkout. Before each attempt, the crew discards
+uncommitted tracked changes and non-ignored untracked files, resets local
+`main` to the fetched `origin/main`, and verifies a clean checkout before
+and after switching to the task branch. Existing task-branch commits are
+kept. The default ledger, the configured local ledger, `.env` files, and
+`*.local` files are protected. Keep other local secrets outside the
+checkout. If preparation fails, no agent runs.
+
 The crew runs as one always-on replica in Container App
 `ca-agent-crew` (see "Compute" above). On start it loads config
 from the environment only, reads its token from Key Vault

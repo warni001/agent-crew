@@ -255,7 +255,7 @@ def test_run_task_refuses_when_tracked_spend_over_line(spend_mod):
 def task_runner(tmp_path, monkeypatch):
     main = require_crew("__main__")
     ledger = main.Ledger(tmp_path / "ledger.jsonl")
-    monkeypatch.setattr(main, "ensure_task_branch", lambda branch: branch)
+    monkeypatch.setattr(main, "ensure_task_branch", lambda branch, ledger_path: branch)
     monkeypatch.setattr(main, "report_done", lambda *args: None)
     return main, ledger
 

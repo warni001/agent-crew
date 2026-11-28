@@ -24,6 +24,7 @@ import shlex
 import signal
 import subprocess
 import sys
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from agent_framework import tool
@@ -295,35 +296,93 @@ def task_branch_name(issue_number: int | None, task: str) -> str:
 _BRANCH_RE = re.compile(r"^crew/task-[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def ensure_task_branch(branch: str) -> str:
-    """Create or check out the task branch in the local checkout, from current main.
+_RUNTIME_PATTERNS = (".env", ".env.*", "*.local")
 
-    Deterministic branch setup, done in code before the workflow runs —
-    the builder never decides about branches, so there is no branch
-    refusal to stall on (Nov 27, #75: the builder refused twice in
-    prose, once over branching, once over the plan, while making zero
-    tool calls). If the branch already exists locally, check it out (a
-    retry continues its work); if it exists on origin only, check it
-    out tracking origin; otherwise create it from origin/main. The
-    branch stays local until the builder pushes its commits — a branch
-    for a task that stalls immediately leaves nothing on the remote.
-    Raises RuntimeError (via _run) when git fails; the caller degrades
-    to the old behaviour instead of failing the run.
-    """
-    if not _BRANCH_RE.match(branch):
+
+def _runtime_excludes(ledger_path: str, refs: set[str]) -> list[str]:
+    """Protect local runtime data before any command that can discard files."""
+    root = _repo_root()
+    protected = {Path("crew-ledger.jsonl")}
+    for value in (ledger_path, os.environ.get("CREW_LEDGER_PATH", ledger_path)):
+        path = Path(os.path.abspath(value))
+        # Protect both a ledger symlink (or symlinked parent) and its target.
+        for candidate in (path, Path(value).resolve(), *(p for p in path.parents if p.is_symlink())):
+            if candidate.is_relative_to(root):
+                protected.add(candidate.relative_to(root))
+
+    def is_runtime(path: Path) -> bool:
+        return any(
+            part != ".env.example" and fnmatchcase(part, pattern)
+            for part in path.parts for pattern in _RUNTIME_PATTERNS
+        )
+
+    tracked = set(_run(["git", "ls-files", "-z"], raw_stdout=True).split("\0"))
+    for ref in sorted(refs):
+        tracked.update(_run(
+            ["git", "ls-tree", "-rz", "--name-only", ref], raw_stdout=True,
+        ).split("\0"))
+    for name in sorted(tracked - {""}):
+        path = Path(name)
+        overlaps_ledger = any(
+            path.is_relative_to(p) or p.is_relative_to(path) for p in protected
+        )
+        # A tracked file can replace an untracked directory at that path.
+        contains_runtime = path.is_dir() and any(
+            is_runtime(p.relative_to(root)) for p in (root / path).rglob("*")
+        )
+        if is_runtime(path) or overlaps_ledger or contains_runtime:
+            raise RuntimeError(f"tracked path conflicts with protected runtime data: {name}")
+
+    # Use literal, root-anchored ignore rules for configured ledger paths.
+    patterns = [*_RUNTIME_PATTERNS, "!.env.example"]
+    for path in sorted(protected):
+        name = path.as_posix()
+        if "\n" in name or "\r" in name or name == ".":
+            raise ValueError(f"cannot protect ledger path {name!r}")
+        patterns.append("/" + re.sub(r"([\\*?\[\] ])", r"\\\1", name))
+    exclude = Path(_run(["git", "rev-parse", "--git-path", "info/exclude"]))
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude.read_bytes() if exclude.exists() else b""
+    missing = [os.fsencode(pattern) for pattern in patterns
+               if os.fsencode(pattern) not in existing.splitlines()]
+    if missing:
+        with exclude.open("ab") as stream:
+            stream.write(b"\n" + b"\n".join(missing) + b"\n")
+    return patterns
+
+
+def _require_clean_checkout(branch: str) -> None:
+    status = _run(["git", "status", "--short", "--untracked-files=all"], raw_stdout=True)
+    if status.strip():
+        raise RuntimeError(f"workspace still dirty on {branch}:\n{status.rstrip()}")
+
+
+def ensure_task_branch(branch: str, ledger_path: str = "crew-ledger.jsonl") -> str:
+    """Reset the disposable checkout to fresh main, then resume or create the task branch."""
+    if not _BRANCH_RE.fullmatch(branch):
         raise ValueError(f"refusing unexpected branch name: {branch!r}")
-    _run(["git", "fetch", "origin", "main"])
-    try:
-        _run(["git", "show-ref", "--verify", f"refs/heads/{branch}"])
-    except RuntimeError:
-        # No local branch: track the remote one, or create from main.
-        remote = _run(["git", "ls-remote", "--heads", "origin", branch]).strip()
-        if remote:
-            _run(["git", "checkout", "-b", branch, "--track", f"origin/{branch}"])
-        else:
-            _run(["git", "checkout", "-b", branch, "origin/main"])
-        return branch
-    _run(["git", "checkout", branch])
+    main = "refs/remotes/origin/main"
+    _run(["git", "fetch", "origin", f"+refs/heads/main:{main}"])
+    local = f"refs/heads/{branch}"
+    remote = f"refs/remotes/origin/{branch}"
+    if local in _run(["git", "for-each-ref", "--format=%(refname)", local]).splitlines():
+        target = local
+        checkout = [branch]
+    elif _run(["git", "ls-remote", "--heads", "origin", local], raw_stdout=True).strip():
+        _run(["git", "fetch", "origin", f"+{local}:{remote}"])
+        target = remote
+        checkout = ["-b", branch, "--track", remote]
+    else:
+        target = main
+        checkout = ["-b", branch, main]
+
+    patterns = _runtime_excludes(ledger_path, {"HEAD", main, target})
+    _run(["git", "reset", "--hard", "HEAD"])
+    _run(["git", "clean", "-fd", *(f"-e{pattern}" for pattern in patterns)])
+    _run(["git", "checkout", "--no-overwrite-ignore", "-B", "main", main])
+    _require_clean_checkout("main")
+    _run(["git", "checkout", "--no-overwrite-ignore", *checkout])
+    _require_clean_checkout(branch)
     return branch
 
 
