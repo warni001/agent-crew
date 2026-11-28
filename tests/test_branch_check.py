@@ -244,6 +244,8 @@ def test_approved_pr_merges_despite_sibling_changes_requested(monkeypatch, tmp_p
     through merge_pr with --merge (pinned by test_merge_pr.py)."""
     tools_mod = require_crew("tools")
     monkeypatch.setenv("CREW_LEDGER_PATH", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.setenv("REVIEWER_GITHUB_TOKEN", "reviewer-fixture")
+    _fake_run(monkeypatch, [])
     tools_mod.record_sign_off(34, "changes_requested", "gate hole")
     tools_mod.record_sign_off(35, "changes_requested", "error URL")
     tools_mod.record_sign_off(36, "approved", "docs-only, tests pass")

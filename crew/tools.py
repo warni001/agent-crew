@@ -47,12 +47,20 @@ _SHELL_ALLOWED_PREFIXES = (
 )
 
 
+def _child_env() -> dict[str, str]:
+    """Do not pass the reviewer credential to ordinary child processes."""
+    env = os.environ.copy()
+    env.pop("REVIEWER_GITHUB_TOKEN", None)
+    return env
+
+
 def _run(
     cmd: list[str],
     timeout: float = 120,
     max_output: int | None = _MAX_OUTPUT,
     *,
     raw_stdout: bool = False,
+    review_token: str = "",
 ) -> str:
     """Run a command (no shell), raise on failure.
 
@@ -68,9 +76,17 @@ def _run(
     are decoded by hand below.
     """
     remaining_task_seconds()  # Don't start a child for an expired task.
+    env = _child_env()
+    if review_token:
+        env["GH_TOKEN"] = review_token
+        env["GH_HOST"] = "github.com"
+        env["GH_PROMPT_DISABLED"] = "1"
+        for key in ("GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+                    "GH_DEBUG", "DEBUG"):
+            env.pop(key, None)
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=not raw_stdout, start_new_session=True,
+        text=not raw_stdout, start_new_session=True, env=env,
     )
     try:
         # Process creation itself is not interruptible. Recheck before waiting.
@@ -100,6 +116,9 @@ def _run(
                 logging.getLogger("crew.tools").warning("could not reap %s promptly", cmd[0])
         raise
     remaining_task_seconds()
+    if review_token:
+        # Never log or return subprocess output from the credentialed review.
+        stdout = stderr = ""
     if proc.returncode != 0:
         out = _decode(stdout + stderr).strip()
         # Log the failure here, with the command and its output: the
@@ -379,19 +398,33 @@ def merge_pr(repo: str, pr_number: int) -> str:
 
 
 def record_sign_off(pr_number: int, verdict: str, notes: str = "") -> str:
-    """Record a reviewer sign-off in the ledger.
+    """Post a formal GitHub review, then record the sign-off in the ledger.
 
     verdict is 'approved' or 'changes_requested'. Only 'approved' lets
-    the merger proceed. The ledger path comes from CREW_LEDGER_PATH.
+    the merger proceed. Pass the review body as notes. Requires the
+    dedicated REVIEWER_GITHUB_TOKEN; never uses the crew token.
     """
+    if type(pr_number) is not int or pr_number <= 0:
+        raise ValueError("expected a positive integer PR number")
     if verdict not in ("approved", "changes_requested"):
         raise ValueError(f"verdict must be 'approved' or 'changes_requested', got {verdict!r}")
+    token = os.environ.get("REVIEWER_GITHUB_TOKEN", "").strip()
+    if not token:
+        message = "missing REVIEWER_GITHUB_TOKEN: cannot post a formal GitHub review"
+        logging.getLogger("crew.tools").warning(message)
+        raise RuntimeError(message)
     from .ledger import Ledger
 
+    flag = "--approve" if verdict == "approved" else "--request-changes"
+    _run(
+        ["gh", "pr", "review", str(pr_number), "--repo", ALLOWED_REPO,
+         flag, f"--body={notes.strip() or verdict}"],
+        review_token=token,
+    )
     entry = Ledger(os.environ.get("CREW_LEDGER_PATH", "crew-ledger.jsonl")).record(
         "review_sign_off", pr_number=pr_number, verdict=verdict, notes=notes
     )
-    return f"recorded {verdict} for PR #{pr_number} at {entry['ts']}"
+    return f"posted GitHub review and recorded {verdict} for PR #{pr_number} at {entry['ts']}"
 
 
 def _review_blocker(pr_number: int) -> str | None:
