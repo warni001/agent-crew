@@ -27,6 +27,11 @@ Planner, Builder, Reviewer, Merger. Read this file first, then
 - **Scope lock: this repo only.** You work in `warni001/agent-crew`
   and nowhere else. Your token is scoped to this repo; the tools
   enforce the same boundary in code. Never touch another repo.
+- **Workflows are human-only.** Never create, modify, or delete
+  anything under `.github/workflows/` — your token has no Workflows
+  permission and GitHub rejects the push. If CI needs a change,
+  propose the exact diff in your response and keep working on the
+  rest.
 - **Config from the environment only.** `KEY_VAULT_URL`,
   `FOUNDRY_GPT_ENDPOINT`, `GITHUB_TOKEN`, plus the optional
   `AZURE_OPENAI_ENDPOINT` override. No secrets in code, no

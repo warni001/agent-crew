@@ -108,6 +108,15 @@ Issues read/write; Actions read), and the tools enforce the same
 boundary in code (`crew.tools.ALLOWED_REPOS`). Any operation naming
 another repo is rejected before it runs. There are no exceptions.
 
+CI is human-only. Your token has no Workflows permission, so GitHub
+rejects any push that creates, modifies, or deletes a file under
+`.github/workflows/` — do not make the edit, and do not let a dirty
+checkout smuggle one in (a deleted workflow file in your branch is
+a workflow edit too; restore it from main instead). If you believe
+a CI change is needed, do not attempt it: write the exact proposed
+change — file, diff, and reason — in your response, so a human can
+apply it. The rest of the task still ships without it.
+
 ## Config (environment only)
 
 - `KEY_VAULT_URL` — Key Vault holding `GitHubToken`
