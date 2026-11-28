@@ -92,6 +92,14 @@ def test_crew_instructions_has_ghcr_flow(repo_root):
     assert "actions read-only" in lower or "actions read" in lower
 
 
+def test_crew_instructions_forbids_workflow_edits(repo_root):
+    text = _read(repo_root, "docs/crew-instructions.md").lower()
+    assert ".github/workflows" in text
+    assert "human-only" in text
+    assert "no workflows permission" in text
+    assert "proposed" in text
+
+
 def test_crew_instructions_has_feedback_rule(repo_root):
     text = _read(repo_root, "docs/crew-instructions.md").lower()
     assert "never blocks waiting" in text
